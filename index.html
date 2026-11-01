@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#1d1b19" />
+    <meta name="description" content="마이크로 연주를 들으며 악보에서 지금 연주 중인 위치를 따라가 표시합니다." />
+    <title>Read Classic · 악보 따라가기</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d1b19'/%3E%3Cpath d='M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z' fill='%23f2542d'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div class="app" id="app">
+      <header class="topbar">
+        <button class="icon-btn only-narrow" id="libraryToggle" aria-label="악보 목록 열기" aria-controls="library" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+        </button>
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">♪</span>
+          <span class="brand-name">Read Classic</span>
+        </div>
+        <div class="now-title" id="nowTitle">악보를 골라 주세요</div>
+        <div class="topbar-actions">
+          <button class="icon-btn" id="zoomOut" aria-label="악보 축소" title="축소">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14" /></svg>
+          </button>
+          <button class="icon-btn" id="zoomIn" aria-label="악보 확대" title="확대">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14" /></svg>
+          </button>
+          <button class="icon-btn" id="settingsToggle" aria-label="설정" aria-controls="settings" aria-expanded="false" title="설정">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
+          </button>
+        </div>
+      </header>
+
+      <aside class="library" id="library" aria-label="악보 목록">
+        <div class="library-inner">
+          <label class="drop" id="drop">
+            <input type="file" id="fileInput" accept=".musicxml,.xml,.mxl,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml" multiple />
+            <span class="drop-title">악보 파일 추가</span>
+            <span class="drop-hint">MusicXML(.musicxml · .xml · .mxl)을 끌어다 놓거나 눌러서 선택</span>
+          </label>
+          <h2 class="lib-heading">내 악보</h2>
+          <ul class="lib-list" id="userList"></ul>
+          <p class="lib-empty" id="userEmpty">아직 올린 악보가 없어요. MuseScore 같은 프로그램에서 <b>내보내기 → MusicXML</b>로 만들 수 있어요.</p>
+          <h2 class="lib-heading">예제 악보</h2>
+          <ul class="lib-list" id="sampleList"></ul>
+          <p class="lib-note" id="storageNote" hidden>이 브라우저에서는 악보를 영구 저장할 수 없어 창을 닫으면 사라집니다.</p>
+        </div>
+      </aside>
+      <div class="scrim" id="scrim" hidden></div>
+
+      <main class="stage" id="stage">
+        <div class="paper-wrap" id="paperWrap">
+          <div class="paper" id="score" aria-label="악보"></div>
+          <div class="empty-state" id="emptyState">
+            <p class="empty-big">♪</p>
+            <p>왼쪽 목록에서 악보를 고르거나 파일을 추가하세요.</p>
+          </div>
+          <div class="loading" id="loading" hidden>악보를 불러오는 중…</div>
+        </div>
+      </main>
+
+      <section class="settings" id="settings" hidden aria-label="설정">
+        <div class="settings-row">
+          <label for="sensitivity">마이크 감도</label>
+          <input type="range" id="sensitivity" min="0" max="1" step="0.05" value="0.5" />
+          <span class="settings-val" id="sensitivityVal">보통</span>
+        </div>
+        <div class="settings-row">
+          <label for="bpm">연습 템포 (♩)</label>
+          <input type="number" id="bpm" min="20" max="320" step="1" inputmode="numeric" />
+          <span class="settings-val">BPM · 연주하면서 자동으로 맞춰져요</span>
+        </div>
+        <div class="settings-row">
+          <label for="strictness">음정 판정</label>
+          <input type="range" id="strictness" min="5" max="14" step="0.5" value="9" />
+          <span class="settings-val" id="strictnessVal">보통</span>
+        </div>
+        <div class="settings-row">
+          <label for="autoScroll">자동 스크롤</label>
+          <input type="checkbox" id="autoScroll" checked />
+          <span class="settings-val">연주 위치를 화면 위쪽에 유지</span>
+        </div>
+        <p class="settings-help">악보를 누르면 그 음부터 따라갑니다. 키보드: <kbd>Space</kbd> 듣기/멈춤 · <kbd>←</kbd><kbd>→</kbd> 한 음씩 · <kbd>Home</kbd> 처음으로</p>
+      </section>
+
+      <footer class="dock" aria-label="연주 추적">
+        <button class="mic-btn" id="micBtn" disabled aria-pressed="false">
+          <span class="mic-dot" aria-hidden="true"></span>
+          <span class="mic-label" id="micLabel">듣기 시작</span>
+        </button>
+        <div class="dock-info">
+          <div class="status" id="status" role="status" aria-live="polite">악보를 고르면 시작할 수 있어요</div>
+          <div class="meters">
+            <div class="level" aria-hidden="true"><div class="level-fill" id="levelFill"></div><div class="level-gate" id="levelGate"></div></div>
+            <div class="chroma" id="chroma" aria-hidden="true"></div>
+          </div>
+        </div>
+        <div class="dock-pos">
+          <div class="measure"><span class="measure-label">마디</span> <b id="measureNow">–</b><span class="measure-total" id="measureTotal"></span></div>
+          <div class="tempo" id="tempo">♩ –</div>
+        </div>
+        <div class="dock-nav">
+          <button class="icon-btn" id="toStart" aria-label="처음으로" title="처음으로 (Home)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 5v14M18 6l-8 6 8 6z" /></svg>
+          </button>
+          <button class="icon-btn" id="stepBack" aria-label="한 음 뒤로" title="한 음 뒤로 (←)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6" /></svg>
+          </button>
+          <button class="icon-btn" id="stepFwd" aria-label="한 음 앞으로" title="한 음 앞으로 (→)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" /></svg>
+          </button>
+        </div>
+      </footer>
+      <div class="toast" id="toast" role="alert" hidden></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

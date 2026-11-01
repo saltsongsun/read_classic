@@ -1,0 +1,36 @@
+{
+  "name": "read_classic",
+  "version": "1.0.0",
+  "description": "마이크로 연주를 들으며 악보에서 지금 연주 중인 위치를 표시하는 웹 앱",
+  "scripts": {
+    "dev": "vite",
+    "build": "node scripts/make-samples.mjs && tsc -p . && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc -p .",
+    "samples": "node scripts/make-samples.mjs",
+    "report": "REPORT=1 vitest run --disable-console-intercept",
+    "e2e": "node tests/e2e/run.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/saltsongsun/read_classic.git"
+  },
+  "keywords": [],
+  "author": "",
+  "bugs": {
+    "url": "https://github.com/saltsongsun/read_classic/issues"
+  },
+  "homepage": "https://github.com/saltsongsun/read_classic#readme",
+  "dependencies": {
+    "opensheetmusicdisplay": "^2.2.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  },
+  "type": "module",
+  "private": true
+}
