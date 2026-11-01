@@ -27,6 +27,53 @@ export interface TrackerOptions {
   sharpness?: number;
   /** 연주자의 템포 변화를 따라갈지. */
   adaptTempo?: boolean;
+  /**
+   * 추적 단위의 최소 길이(초, 악보 템포 기준). 이보다 짧은 음들은 묶어서 한 단위로 추적하고,
+   * 단위 안에서의 음 위치는 시간으로 나눠 표시한다. 홀 잔향·페달로 빠른 음들이 뭉개질 때 강하다.
+   */
+  minUnitSec?: number;
+}
+
+/** 추적 단위: 연속된 악보 이벤트 [first, last] */
+interface Unit {
+  first: number;
+  last: number;
+  beats: number;
+}
+
+const MIN_UNIT_SEC = 0; // 기본은 음 하나하나를 추적 (묶으면 마른 소리에서 오히려 나빠짐)
+
+/** 짧은 이벤트들을 묶는다. 마디가 바뀌는 곳에서는 끊는다. */
+function groupUnits(events: ScoreEvent[], minBeats: number): Unit[] {
+  const units: Unit[] = [];
+  let cur: Unit | null = null;
+  events.forEach((ev, i) => {
+    if (cur && (cur.beats >= minBeats || ev.measure !== events[cur.first].measure)) {
+      units.push(cur);
+      cur = null;
+    }
+    if (!cur) cur = { first: i, last: i, beats: ev.beats };
+    else {
+      cur.last = i;
+      cur.beats += ev.beats;
+    }
+  });
+  if (cur) units.push(cur);
+  return units;
+}
+
+/** 단위 하나를 이벤트 하나처럼 보이게 합친다 (템플릿 계산용). */
+function mergeUnit(events: ScoreEvent[], u: Unit): ScoreEvent {
+  const notes = new Set<number>();
+  for (let i = u.first; i <= u.last; i++) for (const m of events[i].notes) notes.add(m);
+  const first = events[u.first];
+  return {
+    notes: [...notes],
+    held: first.held.filter((m) => !notes.has(m)),
+    beats: u.beats,
+    measure: first.measure,
+    cursorStep: first.cursorStep,
+  };
 }
 
 const HARMONIC_WEIGHTS = [1, 0.6, 0.45, 0.35, 0.28, 0.22, 0.18, 0.15];
@@ -38,15 +85,19 @@ const ONSET_BOOST = 0.6; // 온셋이 확실할 때 다음 음으로 넘어갈 �
 // 크로마 유사도 하한: 틀린 음처럼 어디와도 안 맞는 소리는 모든 위치에 똑같이 불리하게만 작용해서
 // 엉뚱한 곳으로 끌려가지 않고 템포대로 흘러가게 한다.
 const SIM_FLOOR = 0.5;
+/** 온셋 프레임에서 어택 상태 유사도에 "새로 생긴 소리" 크로마를 섞는 최대 비율 */
+const ATTACK_MIX = 0.6;
 
 // 재탐색
 const RELOC_WINDOW_SEC = 2.0; // 비교할 최근 연주 길이
 const RELOC_EVERY = 6; // 몇 프레임마다 재탐색할지
 const RELOC_BACK = 64; // 현재 위치에서 뒤로 몇 이벤트까지 찾아볼지
 const RELOC_FWD = 32; // 앞으로 몇 이벤트까지
-const RELOC_MARGIN = 6; // 로그우도가 이만큼(nats) 더 좋아야 옮긴다
-const RELOC_TAU_BACK = 24; // 시작 위치 사전확률의 감쇠 (이벤트 수)
-const RELOC_TAU_FWD = 8;
+const RELOC_MARGIN = 16; // 로그우도가 이만큼(nats) 더 좋아야 옮긴다 (프레임끼리 비슷해서 증거가 부풀려지므로 넉넉하게)
+const RELOC_TAU_BACK = 24; // 시작 위치 사전확률의 감쇠 (이벤트 수). 앞 구절로 돌아가 다시 치는 일은 흔하다
+const RELOC_TAU_FWD = 3; // 앞으로 건너뛰는 일은 드물다
+const RELOC_CONFIRM = 2; // 같은 결론이 몇 번 연속 나와야 옮길지
+const RELOC_MIN_SIM = 0.72; // 옮겨 갈 곳의 평균 유사도 하한
 
 function addNote(t: Float64Array, midi: number, gain: number): void {
   for (let h = 0; h < HARMONIC_WEIGHTS.length; h++) {
@@ -69,6 +120,43 @@ export function chromaTemplate(ev: ScoreEvent): Float64Array {
   for (const m of ev.notes) addNote(t, m, 1);
   for (const m of ev.held) addNote(t, m, 0.5);
   return normalize(t);
+}
+
+/**
+ * 페달·홀 잔향으로 앞서 친 음이 남아 울리는 정도 (박 단위 감쇠).
+ * 지속 상태는 "마른" 템플릿과 이 "울리는" 템플릿 중 더 잘 맞는 쪽을 쓰므로, 방 소리에 맞춰 저절로 고른다.
+ */
+export const RING = { gain: 1.0, tau: 2, window: 4 };
+
+/**
+ * 울림까지 넣은 템플릿: 바로 앞 몇 박 안에 친 음들을 거리에 따라 약하게 더한다.
+ * 피아노는 페달과 홀 잔향 때문에 분산화음의 앞 음들이 계속 들리므로, 이게 없으면
+ * 지금 음보다 "울리는 화음 전체"에 더 잘 맞는 음 위치에 붙어 버린다.
+ */
+export function ringingTemplates(events: ScoreEvent[]): Float64Array[] {
+  const onset: number[] = [];
+  let b = 0;
+  for (const e of events) {
+    onset.push(b);
+    b += e.beats;
+  }
+  return events.map((ev, j) => {
+    const t = new Float64Array(12);
+    for (const m of ev.notes) addNote(t, m, 1);
+    for (const m of ev.held) addNote(t, m, 0.5);
+    if (RING.gain > 0) {
+      const present = new Set([...ev.notes, ...ev.held]);
+      const ringing = new Map<number, number>();
+      for (let k = j - 1; k >= 0 && onset[j] - onset[k] <= RING.window; k--) {
+        const w = RING.gain * Math.exp(-(onset[j] - onset[k]) / RING.tau);
+        for (const m of events[k].notes) {
+          if (!present.has(m)) ringing.set(m, Math.max(ringing.get(m) ?? 0, w));
+        }
+      }
+      for (const [m, w] of ringing) addNote(t, m, w);
+    }
+    return normalize(t);
+  });
 }
 
 /**
@@ -112,15 +200,19 @@ class Belief {
 
 interface HistoryFrame {
   chroma: Float64Array;
+  attack: Float64Array;
   onset: number;
   logLik: number; // 주 추적기가 이 프레임에서 얻은 로그 예측우도
 }
 
 export class ScoreFollower {
   readonly events: ScoreEvent[];
-  private readonly n: number;
-  private readonly tmplS: Float64Array[]; // 지속 상태 템플릿
+  private readonly units: Unit[];
+  private readonly n: number; // 단위 수
+  private readonly tmplS: Float64Array[]; // 지속 상태 템플릿 (마른 소리)
+  private readonly tmplWet: Float64Array[] | null; // 앞 음들이 남아 울리는 경우 (페달·홀 잔향)
   private readonly tmplA: Float64Array[]; // 어택 상태 템플릿 (이전 음이 섞여 있음)
+  private readonly tmplNew: Float64Array[]; // 이 이벤트에서 새로 치는 음만
   private readonly repeated: Uint8Array; // 바로 앞 이벤트와 같은 음(들)인지
   private readonly expected: Float64Array; // 지속 상태의 예상 프레임 수
 
@@ -136,7 +228,8 @@ export class ScoreFollower {
   adaptTempo: boolean;
 
   private fresh = false; // 위치를 직접 지정한 직후 한 프레임은 전이를 건너뛴다
-  private current = -1;
+  private current = -1; // 현재 단위
+  private currentEvent = -1; // 현재 이벤트 (화면 표시용)
   private confidence = 0;
   private enteredAt = 0; // 현재 이벤트에 들어온 (연주 중) 시각
   private voicedTime = 0; // 소리가 난 시간 누적 (쉼 동안은 멈춤)
@@ -144,20 +237,25 @@ export class ScoreFollower {
   private readonly history: HistoryFrame[] = [];
   private readonly historyLen: number;
   private sinceReloc = 0;
+  private relocCandidate = -1;
+  private relocVotes = 0;
 
   constructor(events: ScoreEvent[], opts: TrackerOptions) {
     if (events.length === 0) throw new Error('악보에 음표가 없습니다.');
     this.events = events;
-    this.n = events.length;
     this.hopSec = opts.hopSec;
     this.scoreBpm = opts.bpm ?? 100;
+    this.units = groupUnits(events, ((opts.minUnitSec ?? MIN_UNIT_SEC) * this.scoreBpm) / 60);
+    this.n = this.units.length;
+    const unitEvents = this.units.map((u) => mergeUnit(events, u));
     this.bpm = this.scoreBpm;
     this.sharpness = opts.sharpness ?? 9;
     this.adaptTempo = opts.adaptTempo ?? true;
     this.historyLen = Math.max(10, Math.round(RELOC_WINDOW_SEC / this.hopSec));
 
-    this.tmplS = events.map(chromaTemplate);
-    this.tmplA = events.map((ev, j) => {
+    this.tmplS = unitEvents.map(chromaTemplate);
+    this.tmplWet = RING.gain > 0 ? ringingTemplates(unitEvents) : null;
+    this.tmplA = unitEvents.map((ev, j) => {
       const t = chromaTemplate(ev).slice();
       if (j > 0) {
         const prev = this.tmplS[j - 1];
@@ -165,9 +263,14 @@ export class ScoreFollower {
       }
       return normalize(t);
     });
+    // 어택 상태는 단위의 첫 음과 비교
+    this.tmplNew = this.units.map((u) => chromaTemplate({ ...events[u.first], held: [] }));
     const n = this.n;
     this.repeated = new Uint8Array(n);
-    for (let j = 1; j < n; j++) this.repeated[j] = dot(this.tmplS[j - 1], this.tmplS[j]) > 0.97 ? 1 : 0;
+    for (let j = 1; j < n; j++) {
+      const prevLast = chromaTemplate({ ...events[this.units[j - 1].last], held: [] });
+      this.repeated[j] = dot(prevLast, this.tmplNew[j]) > 0.97 ? 1 : 0;
+    }
     this.expected = new Float64Array(n);
     this.cur = new Belief(n);
     this.next = new Belief(n);
@@ -180,8 +283,34 @@ export class ScoreFollower {
     return this.bpm;
   }
 
+  /** 현재 이벤트 인덱스 (시작 전이면 -1). */
   get position(): number {
-    return this.current;
+    return this.currentEvent;
+  }
+
+  private unitOf(eventIndex: number): number {
+    let lo = 0;
+    let hi = this.n - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (this.units[mid].first <= eventIndex) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo;
+  }
+
+  /** 단위 안에서 머문 시간으로 지금 몇 번째 음인지 나눈다. */
+  private eventInUnit(u: number): number {
+    const unit = this.units[u];
+    if (unit.first === unit.last) return unit.first;
+    const frac = Math.min(0.999, Math.max(0, (this.cur.e[u] + 1) / (this.expected[u] + 1)));
+    const target = frac * unit.beats;
+    let acc = 0;
+    for (let i = unit.first; i <= unit.last; i++) {
+      acc += this.events[i].beats;
+      if (acc > target) return i;
+    }
+    return unit.last;
   }
 
   setSharpness(v: number): void {
@@ -199,6 +328,7 @@ export class ScoreFollower {
     this.cur.clear();
     this.cur.pre = 1;
     this.current = -1;
+    this.currentEvent = -1;
     this.confidence = 1;
     this.fresh = false;
     this.bpm = this.scoreBpm;
@@ -209,11 +339,17 @@ export class ScoreFollower {
 
   /** 사용자가 위치를 직접 지정 (해당 음을 지금 연주하고 있거나 곧 연주한다고 가정). */
   setPosition(index: number): void {
-    const j = Math.max(0, Math.min(this.n - 1, index));
+    const ev = Math.max(0, Math.min(this.events.length - 1, index));
+    const j = this.unitOf(ev);
     this.cur.clear();
     this.cur.a[j] = 0.5;
     this.cur.s[j] = 0.5;
+    // 단위 중간의 음을 골랐다면 그만큼 지난 것으로
+    let before = 0;
+    for (let i = this.units[j].first; i < ev; i++) before += this.events[i].beats;
+    this.cur.e[j] = (before * 60) / this.bpm / this.hopSec;
     this.current = j;
+    this.currentEvent = ev;
     this.confidence = 1;
     this.fresh = true;
     this.enteredAt = this.voicedTime;
@@ -224,14 +360,14 @@ export class ScoreFollower {
   private updateExpected(): void {
     const framesPerBeat = 60 / this.bpm / this.hopSec;
     for (let j = 0; j < this.n; j++) {
-      this.expected[j] = Math.max(1, this.events[j].beats * framesPerBeat - 1);
+      this.expected[j] = Math.max(1, this.units[j].beats * framesPerBeat - 1);
     }
   }
 
   /** 오디오 프레임 하나를 반영하고 현재 위치를 돌려준다. */
   update(frame: AudioFrame, voiced: boolean): FollowState {
     if (!voiced || frame.tonalness <= 0) {
-      return { index: this.current, confidence: this.confidence, bpm: this.bpm, voiced: false };
+      return { index: this.currentEvent, confidence: this.confidence, bpm: this.bpm, voiced: false };
     }
     this.voicedTime += this.hopSec;
 
@@ -245,13 +381,13 @@ export class ScoreFollower {
     }
     if (!(total > 0) || !Number.isFinite(total)) {
       // 수치적으로 모든 확률이 사라졌다면 현재 위치에서 다시 시작
-      this.setPosition(Math.max(0, this.current));
-      return { index: this.current, confidence: 0, bpm: this.bpm, voiced: true };
+      this.setPosition(Math.max(0, this.currentEvent));
+      return { index: this.currentEvent, confidence: 0, bpm: this.bpm, voiced: true };
     }
     [this.cur, this.next] = [this.next, this.cur];
 
     // 최근 연주 기록 (재탐색용)
-    this.history.push({ chroma: frame.chroma, onset: frame.onset, logLik: Math.log(total) });
+    this.history.push({ chroma: frame.chroma, attack: frame.attack, onset: frame.onset, logLik: Math.log(total) });
     if (this.history.length > this.historyLen) this.history.shift();
     if (++this.sinceReloc >= RELOC_EVERY && this.history.length >= this.historyLen) {
       this.sinceReloc = 0;
@@ -263,8 +399,9 @@ export class ScoreFollower {
       this.onAdvance(this.current, best);
       this.current = best;
     }
+    this.currentEvent = best < 0 ? -1 : this.eventInUnit(best);
     this.confidence = bestP;
-    return { index: this.current, confidence: bestP, bpm: this.bpm, voiced: true };
+    return { index: this.currentEvent, confidence: bestP, bpm: this.bpm, voiced: true };
   }
 
   private argmax(b: Belief, lo: number, hi: number): { best: number; bestP: number } {
@@ -322,8 +459,11 @@ export class ScoreFollower {
   /** 관측 우도를 곱하고 정규화한다. 정규화 전 합을 돌려준다. */
   private observe(b: Belief, frame: AudioFrame, lo: number, hi: number): number {
     const chroma = frame.chroma;
+    const attack = frame.attack;
     const beta = this.sharpness;
     const o = frame.onset;
+    // 새 음이 시작된 프레임에서는 "새로 생긴 소리"가 어택 상태 판단에 더 믿을 만하다
+    const lam = attack ? ATTACK_MIX * o : 0;
     const pOnA = 0.3 + 0.7 * o; // 어택 상태에서 이 정도 온셋이 보일 가능성
     const pOnArep = 0.06 + 0.94 * o; // 같은 음을 다시 칠 때는 온셋이 거의 꼭 있어야 한다
     const pOnS = 1 - 0.85 * o; // 지속 상태에서 이 정도 온셋이 보일 가능성
@@ -331,11 +471,15 @@ export class ScoreFollower {
     let total = 0;
     for (let j = lo; j <= hi; j++) {
       if (a[j] > 1e-300) {
-        const sim = Math.max(SIM_FLOOR, dot(chroma, this.tmplA[j]));
+        let raw = dot(chroma, this.tmplA[j]);
+        if (lam > 0) raw = (1 - lam) * raw + lam * dot(attack, this.tmplNew[j]);
+        const sim = Math.max(SIM_FLOOR, raw);
         a[j] *= Math.exp(beta * (sim - 1)) * (this.repeated[j] ? pOnArep : pOnA);
       } else a[j] = 0;
       if (s[j] > 1e-300) {
-        const sim = Math.max(SIM_FLOOR, dot(chroma, this.tmplS[j]));
+        let raw = dot(chroma, this.tmplS[j]);
+        if (this.tmplWet) raw = Math.max(raw, dot(chroma, this.tmplWet[j]));
+        const sim = Math.max(SIM_FLOOR, raw);
         s[j] *= Math.exp(beta * (sim - 1)) * pOnS;
       } else s[j] = 0;
       total += a[j] + s[j];
@@ -360,6 +504,8 @@ export class ScoreFollower {
    * 지금 경로보다 훨씬 그럴듯하면 그쪽으로 옮긴다.
    */
   private relocalize(): void {
+    // 마지막 음에 도달했으면 곡이 끝난 것: 뒤따르는 박수·잡음으로 위치를 바꾸지 않는다
+    if (this.current >= this.n - 1) return;
     const center = Math.max(0, this.current);
     const lo = Math.max(0, center - RELOC_BACK);
     const hi = Math.min(this.n - 1, center + RELOC_FWD);
@@ -383,10 +529,11 @@ export class ScoreFollower {
     }
     let altLL = 0;
     let mainLL = 0;
-    const frame: AudioFrame = { time: 0, rms: 0, tonalness: 1, flatness: 0, chroma: new Float64Array(12), onset: 0 };
+    const frame: AudioFrame = { time: 0, rms: 0, tonalness: 1, flatness: 0, chroma: new Float64Array(12), attack: new Float64Array(12), onset: 0 };
     for (let i = 0; i < this.history.length; i++) {
       const h = this.history[i];
       frame.chroma = h.chroma;
+      frame.attack = h.attack;
       frame.onset = h.onset;
       let tot: number;
       if (i === 0) tot = this.observe(b, frame, lo, hi);
@@ -400,7 +547,12 @@ export class ScoreFollower {
     }
     this.altCur = b;
     this.altNext = nb;
-    if (altLL - mainLL < RELOC_MARGIN) return;
+    // 옮겨 갈 곳이 "덜 나쁜" 정도가 아니라 실제로 잘 맞아야 한다 (잡음·박수 속에서 헤매지 않게)
+    const altFit = altLL / this.history.length;
+    if (altLL - mainLL < RELOC_MARGIN || altFit < this.sharpness * (RELOC_MIN_SIM - 1)) {
+      this.relocVotes = 0;
+      return;
+    }
 
     // 확률이 비슷한 후보가 여럿이면 (같은 선율 반복) 지금 위치에서 가까운 쪽을 고른다
     const { bestP } = this.argmax(b, lo, hi);
@@ -409,13 +561,32 @@ export class ScoreFollower {
       const p = b.a[j] + b.s[j];
       if (p >= 0.5 * bestP && (best < 0 || Math.abs(j - center) < Math.abs(best - center))) best = j;
     }
-    if (best < 0 || Math.abs(best - this.current) <= 2) return;
-    // 재탐색 결과를 주 추적기 분포로 채택
+    if (best < 0 || Math.abs(best - this.current) <= 2) {
+      this.relocVotes = 0;
+      return;
+    }
+    // 잔향이 많은 곳에서는 증거가 출렁이므로, 같은 곳을 연달아 가리킬 때만 옮긴다
+    if (this.relocVotes > 0 && Math.abs(best - this.relocCandidate) <= 2) this.relocVotes++;
+    else {
+      this.relocCandidate = best;
+      this.relocVotes = 1;
+    }
+    if (this.relocVotes < RELOC_CONFIRM) return;
+    this.relocVotes = 0;
+    // 재탐색 결과 중 고른 위치 주변만 주 추적기 분포로 채택 (다른 후보로 다시 튀지 않게)
     this.cur.clear();
-    for (let j = lo; j <= hi; j++) {
+    let mass = 0;
+    for (let j = Math.max(lo, best - 3); j <= Math.min(hi, best + 3); j++) {
       this.cur.a[j] = b.a[j];
       this.cur.s[j] = b.s[j];
       this.cur.e[j] = b.e[j];
+      mass += b.a[j] + b.s[j];
+    }
+    if (mass > 0) {
+      for (let j = Math.max(lo, best - 3); j <= Math.min(hi, best + 3); j++) {
+        this.cur.a[j] /= mass;
+        this.cur.s[j] /= mass;
+      }
     }
     // 같은 평가가 반복되지 않도록 기록의 우도를 새 경로 기준으로 맞춘다
     const share = altLL / this.history.length;
@@ -428,7 +599,7 @@ export class ScoreFollower {
     const now = this.voicedTime;
     if (this.adaptTempo && from >= 0 && to === from + 1) {
       const dur = now - this.enteredAt;
-      const beats = this.events[from].beats;
+      const beats = this.units[from].beats;
       if (dur > 0.05 && beats > 0) {
         const inst = (60 * beats) / dur;
         const lo = Math.max(30, this.scoreBpm * 0.4);

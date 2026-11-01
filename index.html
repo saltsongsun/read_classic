@@ -35,13 +35,18 @@
       <aside class="library" id="library" aria-label="악보 목록">
         <div class="library-inner">
           <label class="drop" id="drop">
-            <input type="file" id="fileInput" accept=".musicxml,.xml,.mxl,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml" multiple />
+            <input type="file" id="fileInput" accept=".musicxml,.xml,.mxl,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml,image/*,.pdf,application/pdf" multiple />
             <span class="drop-title">악보 파일 추가</span>
-            <span class="drop-hint">MusicXML(.musicxml · .xml · .mxl)을 끌어다 놓거나 눌러서 선택</span>
+            <span class="drop-hint">PDF · 사진/이미지 · MusicXML 을 끌어다 놓거나 눌러서 선택</span>
+          </label>
+          <label class="cam-btn">
+            <input type="file" id="cameraInput" accept="image/*" capture="environment" />
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>
+            악보 사진 찍기
           </label>
           <h2 class="lib-heading">내 악보</h2>
           <ul class="lib-list" id="userList"></ul>
-          <p class="lib-empty" id="userEmpty">아직 올린 악보가 없어요. MuseScore 같은 프로그램에서 <b>내보내기 → MusicXML</b>로 만들 수 있어요.</p>
+          <p class="lib-empty" id="userEmpty">아직 올린 악보가 없어요. 악보 PDF 나 사진을 올리면 인식해서 저장해요.</p>
           <h2 class="lib-heading">예제 악보</h2>
           <ul class="lib-list" id="sampleList"></ul>
           <p class="lib-note" id="storageNote" hidden>이 브라우저에서는 악보를 영구 저장할 수 없어 창을 닫으면 사라집니다.</p>
@@ -52,6 +57,7 @@
       <main class="stage" id="stage">
         <div class="paper-wrap" id="paperWrap">
           <div class="paper" id="score" aria-label="악보"></div>
+          <div class="image-score" id="imageScore" aria-label="악보" hidden></div>
           <div class="empty-state" id="emptyState">
             <p class="empty-big">♪</p>
             <p>왼쪽 목록에서 악보를 고르거나 파일을 추가하세요.</p>
@@ -61,6 +67,16 @@
       </main>
 
       <section class="settings" id="settings" hidden aria-label="설정">
+        <div class="settings-row">
+          <label for="expected">예상 연주 시간</label>
+          <input type="text" id="expected" inputmode="numeric" placeholder="예: 6:30" />
+          <span class="settings-val">이 곡. 알면 처음부터 남은 시간이 더 정확해요</span>
+        </div>
+        <div class="settings-row">
+          <label for="alertSec">끝나기 전 알림</label>
+          <input type="number" id="alertSec" min="0" max="600" step="5" inputmode="numeric" />
+          <span class="settings-val">초 남았을 때 화면이 바뀌고 (휴대폰은) 진동해요</span>
+        </div>
         <div class="settings-row">
           <label for="sensitivity">마이크 감도</label>
           <input type="range" id="sensitivity" min="0" max="1" step="0.05" value="0.5" />
@@ -77,6 +93,16 @@
           <span class="settings-val" id="strictnessVal">보통</span>
         </div>
         <div class="settings-row">
+          <label for="omrServer">악보 인식 서버</label>
+          <input type="url" id="omrServer" placeholder="비워 두면 이 주소의 서버" />
+          <span class="settings-val" id="omrServerStatus">사진·PDF 악보를 읽을 때 씁니다</span>
+        </div>
+        <div class="settings-row">
+          <label for="showTicks">인식된 음 표시</label>
+          <input type="checkbox" id="showTicks" />
+          <span class="settings-val">사진 악보에서 인식된 음 위치를 눈금으로 보여 줘요</span>
+        </div>
+        <div class="settings-row">
           <label for="autoScroll">자동 스크롤</label>
           <input type="checkbox" id="autoScroll" checked />
           <span class="settings-val">연주 위치를 화면 위쪽에 유지</span>
@@ -84,7 +110,8 @@
         <p class="settings-help">악보를 누르면 그 음부터 따라갑니다. 키보드: <kbd>Space</kbd> 듣기/멈춤 · <kbd>←</kbd><kbd>→</kbd> 한 음씩 · <kbd>Home</kbd> 처음으로</p>
       </section>
 
-      <footer class="dock" aria-label="연주 추적">
+      <footer class="dock" aria-label="연주 추적" id="dock">
+        <div class="progress" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
         <button class="mic-btn" id="micBtn" disabled aria-pressed="false">
           <span class="mic-dot" aria-hidden="true"></span>
           <span class="mic-label" id="micLabel">듣기 시작</span>
@@ -96,8 +123,12 @@
             <div class="chroma" id="chroma" aria-hidden="true"></div>
           </div>
         </div>
+        <div class="dock-time">
+          <div class="remain"><span class="remain-label" id="remainLabel">남은 시간</span> <b id="remain">–</b></div>
+          <div class="elapsed" id="elapsed">경과 0:00</div>
+        </div>
         <div class="dock-pos">
-          <div class="measure"><span class="measure-label">마디</span> <b id="measureNow">–</b><span class="measure-total" id="measureTotal"></span></div>
+          <div class="measure"><span class="measure-label">마디</span> <b id="measureNow">·</b><span class="measure-total" id="measureTotal"></span></div>
           <div class="tempo" id="tempo">♩ –</div>
         </div>
         <div class="dock-nav">
@@ -113,6 +144,25 @@
         </div>
       </footer>
       <div class="toast" id="toast" role="alert" hidden></div>
+
+      <dialog class="import" id="importDialog" aria-labelledby="importHeading">
+        <div class="import-inner">
+          <h2 id="importHeading">사진·PDF 악보 만들기</h2>
+          <label class="field">곡 제목 <input type="text" id="importTitle" placeholder="예: 쇼팽 녹턴 Op.9-2" /></label>
+          <p class="import-hint">쪽 순서대로 넣어 주세요. 사진은 악보 한 쪽이 화면에 꽉 차게, 밝은 곳에서 똑바로 찍으면 가장 잘 읽혀요.</p>
+          <ol class="thumbs" id="importPages"></ol>
+          <div class="import-add">
+            <label class="btn"><input type="file" accept="image/*" capture="environment" id="importCamera" />📷 쪽 찍기</label>
+            <label class="btn"><input type="file" accept="image/*,.pdf,application/pdf" multiple id="importFiles" />사진·PDF 추가</label>
+          </div>
+          <p class="import-server" id="importServer">악보 인식 서버 확인 중…</p>
+          <p class="import-progress" id="importProgress" role="status" aria-live="polite" hidden></p>
+          <div class="import-buttons">
+            <button type="button" class="btn" id="importCancel">취소</button>
+            <button type="button" class="btn primary" id="importStart">인식 시작</button>
+          </div>
+        </div>
+      </dialog>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

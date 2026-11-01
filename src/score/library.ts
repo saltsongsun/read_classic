@@ -7,8 +7,14 @@ export interface StoredScore {
   title: string;
   fileName: string;
   addedAt: number;
-  /** MusicXML 텍스트 또는 .mxl(압축) 바이너리 */
+  /** MusicXML 텍스트 또는 .mxl(압축) 바이너리 (사진 악보는 빈 값) */
   data: Blob;
+  /** 'image' = 사진/PDF 를 인식한 악보 */
+  kind?: 'xml' | 'image';
+  /** 사진 악보: 쪽별 이미지와 크기, 인식 결과 */
+  pages?: Blob[];
+  pageSizes?: Array<{ width: number; height: number }>;
+  omr?: Array<{ musicxml: string; staffs: number[][] }>;
 }
 
 export interface ScoreEntry {
@@ -112,6 +118,27 @@ export async function addScoreFile(file: File): Promise<StoredScore> {
     fileName: file.name,
     addedAt: Date.now(),
     data: file.slice(0, file.size, file.type || 'application/octet-stream'),
+  };
+  await putScore(score);
+  return score;
+}
+
+/** 사진/PDF 를 인식한 악보를 저장한다. */
+export async function addImageScore(
+  title: string,
+  pages: Array<{ blob: Blob; width: number; height: number }>,
+  omr: Array<{ musicxml: string; staffs: number[][] }>,
+): Promise<StoredScore> {
+  const score: StoredScore = {
+    id: `img-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    title,
+    fileName: `${pages.length}쪽`,
+    addedAt: Date.now(),
+    data: new Blob([]),
+    kind: 'image',
+    pages: pages.map((p) => p.blob),
+    pageSizes: pages.map((p) => ({ width: p.width, height: p.height })),
+    omr,
   };
   await putScore(score);
   return score;

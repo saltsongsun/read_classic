@@ -14,6 +14,11 @@ export interface AudioFrame {
   onset: number;
   /** 스펙트럼 평탄도 (0: 뚜렷한 음, 1: 백색 잡음에 가까움). */
   flatness: number;
+  /**
+   * 방금 새로 생긴 소리의 크로마 (직전 프레임보다 커진 성분만). L2 정규화.
+   * 페달·홀 잔향으로 앞 음들이 계속 울려도 "지금 친 음"을 가려낼 수 있다.
+   */
+  attack: Float64Array;
 }
 
 export interface FeatureOptions {
@@ -27,7 +32,8 @@ export interface FeatureOptions {
   fmax?: number;
 }
 
-const LOG_GAMMA = 100;
+// 크로마 압축 정도. 너무 세게 압축하면 홀 잔향으로 남은 앞 음들이 새 음만큼 커 보인다.
+const LOG_GAMMA = 10;
 const PITCH_SIGMA = 0.22; // 반음 단위. 조율이 조금 어긋나도 허용
 
 /**
@@ -53,6 +59,9 @@ export class FeatureExtractor {
   private readonly mag: Float64Array;
   private readonly logMag: Float64Array;
   private readonly prevOnsetSpec: Float64Array;
+  private readonly binPc: Int8Array; // 긴 창 FFT 칸 → 음이름
+  private readonly binW: Float64Array; // 그 칸이 음이름 중심에 얼마나 가까운지
+  private magHist: Float64Array[]; // 지난 두 프레임의 크기 스펙트럼
   private readonly kmin: number;
   private readonly kmax: number;
   private readonly okmin: number;
@@ -65,6 +74,8 @@ export class FeatureExtractor {
   private fluxDev = 0;
   private prevFlux = 0;
   private framesSeen = 0;
+  private fluxFloor = 0;
+  private peakScale = 0.05;
 
   constructor(sampleRate: number, opts: FeatureOptions = {}) {
     this.sampleRate = sampleRate;
@@ -86,6 +97,15 @@ export class FeatureExtractor {
     const binHz = sampleRate / this.frameSize;
     this.kmin = Math.max(2, Math.floor((opts.fmin ?? 55) / binHz));
     this.kmax = Math.min(this.frameSize / 2 - 2, Math.ceil((opts.fmax ?? 5000) / binHz));
+    this.binPc = new Int8Array(this.frameSize / 2 + 1);
+    this.binW = new Float64Array(this.frameSize / 2 + 1);
+    for (let k = this.kmin; k <= this.kmax; k++) {
+      const midi = 69 + 12 * Math.log2((k * binHz) / 440);
+      const nearest = Math.round(midi);
+      this.binPc[k] = ((nearest % 12) + 12) % 12;
+      this.binW[k] = Math.exp(-0.5 * ((midi - nearest) / 0.35) ** 2);
+    }
+    this.magHist = [new Float64Array(this.frameSize / 2 + 1), new Float64Array(this.frameSize / 2 + 1)];
     const obinHz = sampleRate / this.onsetSize;
     this.okmin = Math.max(1, Math.floor(80 / obinHz));
     this.okmax = Math.min(this.onsetSize / 2 - 1, Math.ceil(8000 / obinHz));
@@ -98,6 +118,7 @@ export class FeatureExtractor {
   reset(): void {
     this.buf.fill(0);
     this.prevOnsetSpec.fill(0);
+    this.magHist.forEach((h) => h.fill(0));
     this.filled = 0;
     this.pending = 0;
     this.totalSamples = 0;
@@ -105,6 +126,8 @@ export class FeatureExtractor {
     this.fluxDev = 0;
     this.prevFlux = 0;
     this.framesSeen = 0;
+    this.fluxFloor = 0;
+    this.peakScale = 0.05;
   }
 
   /** 샘플 블록을 넣고, 완성된 프레임들을 돌려준다. */
@@ -195,6 +218,22 @@ export class FeatureExtractor {
     norm = Math.sqrt(norm);
     if (norm > 0) for (let i = 0; i < 12; i++) chroma[i] /= norm;
 
+    // ---- 새로 생긴 소리의 크로마 (두 프레임 전보다 커진 성분) ----
+    const attack = new Float64Array(12);
+    const old = this.magHist[0];
+    for (let k = this.kmin; k <= this.kmax; k++) {
+      const d = mag[k] - 1.2 * old[k];
+      if (d > 0) attack[this.binPc[k]] += Math.sqrt(d) * this.binW[k];
+    }
+    let an = 0;
+    for (let i = 0; i < 12; i++) an += attack[i] * attack[i];
+    an = Math.sqrt(an);
+    if (an > 0) for (let i = 0; i < 12; i++) attack[i] /= an;
+    const recycled = this.magHist[0];
+    this.magHist[0] = this.magHist[1];
+    recycled.set(mag);
+    this.magHist[1] = recycled;
+
     // ---- 온셋 (짧은 창, 스펙트럴 플럭스) ----
     const on = this.onsetSize;
     const { ore, oim, onsetWin, prevOnsetSpec } = this;
@@ -218,18 +257,29 @@ export class FeatureExtractor {
     }
     flux /= this.okmax - this.okmin + 1;
 
-    // 적응형 문턱값: 최근 플럭스의 평균/편차 대비 얼마나 튀는지
+    // 적응형 문턱값 두 가지를 함께 쓴다.
+    // (1) 최근 평균/편차 대비 얼마나 튀는지: 드문드문한 온셋에 강하다.
+    // (2) 최근 바닥값 대비, 평소 봉우리 높이의 몇 배인지: 잔향 속에서 빠른 음이 촘촘히
+    //     이어질 때 평균이 같이 올라가 (1)이 무뎌지는 것을 막는다.
     this.framesSeen++;
     let onset = 0;
-    if (this.framesSeen > 3) {
+    const rising = flux >= this.prevFlux;
+    const excess = flux - this.fluxFloor;
+    if (this.framesSeen > 3 && rising && flux > 0.02) {
       const z = (flux - this.fluxMean) / (this.fluxDev + 0.01);
-      const rising = flux >= this.prevFlux;
-      if (rising && flux > 0.02) onset = Math.max(0, Math.min(1, (z - 1.5) / 3));
+      const byMean = Math.max(0, Math.min(1, (z - 1.5) / 3));
+      const byFloor = Math.max(0, Math.min(1, (excess / this.peakScale - 0.45) / 0.6));
+      onset = Math.max(byMean, byFloor);
     }
     const alpha = Math.min(1, this.hopSec / 1.5);
     const clipped = Math.min(flux, this.fluxMean + 4 * (this.fluxDev + 0.01));
     this.fluxMean += alpha * (clipped - this.fluxMean);
     this.fluxDev += alpha * (Math.abs(clipped - this.fluxMean) - this.fluxDev);
+    if (flux < this.fluxFloor) this.fluxFloor = flux;
+    else this.fluxFloor += Math.min(1, this.hopSec / 0.6) * (flux - this.fluxFloor);
+    if (excess > 0.3 * this.peakScale) this.peakScale += Math.min(1, this.hopSec / 1.0) * (excess - this.peakScale);
+    else this.peakScale *= 1 - Math.min(1, this.hopSec / 6);
+    this.peakScale = Math.max(this.peakScale, 0.02);
     this.prevFlux = flux;
 
     return {
@@ -239,6 +289,7 @@ export class FeatureExtractor {
       tonalness,
       onset,
       flatness,
+      attack,
     };
   }
 }

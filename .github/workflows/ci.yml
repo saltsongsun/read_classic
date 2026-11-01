@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  web:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,3 +17,14 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # 서버 배선 시험에는 homr 자체가 필요 없다 (대역 스크립트 사용)
+      - run: pip install "fastapi>=0.115,<1" "python-multipart>=0.0.9" httpx pytest
+      - run: python -m pytest -q server/tests

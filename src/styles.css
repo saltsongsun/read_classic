@@ -691,3 +691,344 @@ kbd {
     width: 6px;
   }
 }
+
+/* ---------- 사진 악보 찍기 버튼 ---------- */
+.cam-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--bg);
+  font-weight: 700;
+  cursor: pointer;
+}
+.cam-btn svg {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.cam-btn input,
+.import-add input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.cam-btn:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ---------- 원본(사진/PDF) 악보 ---------- */
+.image-score {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  overflow-x: auto;
+}
+.img-page {
+  position: relative;
+  max-width: none;
+  background: #fff;
+  box-shadow: var(--shadow);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.img-page img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+.img-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.ov-system,
+.ov-measure,
+.ov-note,
+.ov-tick {
+  position: absolute;
+  transition: left 0.12s linear, top 0.2s ease, width 0.12s linear;
+}
+.ov-system {
+  background: rgb(245 183 0 / 0.08);
+  border-left: 4px solid rgb(245 183 0 / 0.7);
+}
+.ov-measure {
+  background: rgb(245 183 0 / 0.22);
+  border-radius: 4px;
+}
+.ov-note {
+  background: rgb(242 84 45 / 0.75);
+  border-radius: 3px;
+  min-width: 4px;
+}
+.ov-tick {
+  width: 2px;
+  background: rgb(47 158 107 / 0.55);
+}
+.ov-system.idle,
+.ov-measure.idle,
+.ov-note.idle {
+  opacity: 0.35;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-system,
+  .ov-measure,
+  .ov-note {
+    transition: none;
+  }
+}
+
+/* ---------- 진행·남은 시간 ---------- */
+.dock {
+  position: relative;
+}
+.progress {
+  position: absolute;
+  top: -1px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--ok);
+  transition: width 0.3s linear;
+}
+.dock-time {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.remain {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.remain b {
+  font-size: 26px;
+  color: var(--ink);
+  letter-spacing: 0.01em;
+}
+.elapsed {
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.dock.ending {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.dock.ending .remain,
+.dock.ending .remain b,
+.dock.ending .elapsed,
+.dock.ending .measure,
+.dock.ending .measure b,
+.dock.ending .measure-total,
+.dock.ending .tempo,
+.dock.ending .status {
+  color: var(--accent-ink);
+}
+.dock.ending .progress-fill {
+  background: var(--accent-ink);
+}
+.dock.ending .mic-btn[aria-pressed='true'] {
+  background: var(--accent-ink);
+  color: var(--accent);
+}
+.dock.finished .progress-fill {
+  background: var(--ink-2);
+}
+
+/* ---------- 사진·PDF 가져오기 ---------- */
+.import {
+  width: min(560px, calc(100vw - 24px));
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+}
+.import::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+.import-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+}
+.import h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.field input,
+.settings-row input[type='text'],
+.settings-row input[type='url'] {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 400;
+  min-width: 0;
+}
+.import-hint,
+.import-server,
+.import-progress {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+.import-server.ok {
+  color: var(--ok);
+}
+.import-server.bad {
+  color: var(--accent);
+}
+.import-progress {
+  font-weight: 600;
+  color: var(--ink);
+}
+.thumbs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+.thumbs:empty::before {
+  content: '아직 쪽이 없어요';
+  grid-column: 1 / -1;
+  padding: 20px;
+  text-align: center;
+  color: var(--ink-3);
+  border: 1.5px dashed var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.thumb {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+.thumb img {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+.thumb-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.thumb-tools button {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--ink-2);
+}
+.thumb-tools button:hover {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+.import-add,
+.import-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.import-buttons {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn:focus-visible,
+.btn:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  :root {
+    --dock-h: 158px;
+  }
+  .dock {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      'time pos'
+      'info info'
+      'mic nav';
+    row-gap: 6px;
+  }
+  .dock-time {
+    grid-area: time;
+    align-items: flex-start;
+  }
+  .remain b {
+    font-size: 24px;
+  }
+  .chroma {
+    display: none;
+  }
+  .level {
+    width: 100%;
+  }
+}

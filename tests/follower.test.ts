@@ -124,12 +124,13 @@ describe('score following on synthesized performances', () => {
 
   test('going back two bars to practise again', () => {
     const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 40], [32, 64]]), tempoWobble: 0.05, seed: 2 });
-    expectTracked(r, 0.93, ode.events.length);
+    // 콩쿠르용으로 위치 이동을 보수적으로 해서, 되돌아간 뒤 알아채는 데 1~2초 걸린다
+    expectTracked(r, 0.88, ode.events.length);
   });
 
   test('restarting from the top is eventually recognised', () => {
     const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 24], [0, 64]]), tempoWobble: 0.05, seed: 2 });
-    expectTracked(r, 0.8, ode.events.length);
+    expectTracked(r, 0.75, ode.events.length);
     // 마지막 두 구절(재시작 이후 충분히 지난 뒤)은 정확해야 한다
     const tail = r.trace.filter((p) => p.truth >= 30);
     const ok = tail.filter((p) => Math.abs(p.idx - p.truth) <= 1).length / tail.length;
@@ -140,6 +141,38 @@ describe('score following on synthesized performances', () => {
     const m9 = ode.events.findIndex((e) => e.measure === 9);
     const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[32, 64]]), startAt: m9, tempoWobble: 0.05, seed: 2 });
     expectTracked(r, 0.98, ode.events.length);
+  });
+
+  test('concert hall: sustain pedal + reverberation, arpeggiated piano', () => {
+    const bach = loadSample('bach-prelude-c');
+    const r = run(bach, { timbre: 'piano', reverb: 0.5, pedalBeats: 2, tempoWobble: 0.1, seed: 4 });
+    expect(r.finalIndex).toBe(bach.events.length - 1);
+    expect(r.near).toBeGreaterThan(0.6);
+    expect(r.measureNear).toBeGreaterThan(0.9);
+  });
+
+  test('concert hall, slow melody with pedal', () => {
+    const r = run(ode, { timbre: 'piano', bpm: 75, reverb: 0.6, pedalBeats: 2, tempoWobble: 0.08, seed: 6 });
+    expectTracked(r, 0.9, ode.events.length);
+  });
+
+  test('applause before the first note does not start the piece', () => {
+    const r = run(ode, { timbre: 'piano', leadIn: 4, applause: [[0.3, 3.2, 0.08]], reverb: 0.4, tempoWobble: 0.08, seed: 3 });
+    const early = r.trace.filter((p) => p.t < 3.8);
+    expect(early.every((p) => p.idx <= 0)).toBe(true);
+    expectTracked(r, 0.97, ode.events.length);
+  });
+
+  test('remaining-time estimate converges as the piece goes on', () => {
+    const r = run(ode, { timbre: 'piano', bpm: 90, reverb: 0.4, pedalBeats: 4, tempoWobble: 0.1, seed: 7 });
+    const start = r.remaining.find((x) => x.started)!.t;
+    const dur = r.endTime - start;
+    for (const f of [0.5, 0.75, 0.9]) {
+      const t = start + f * dur;
+      const p = r.remaining.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+      // 남은 시간 오차가 전체 길이의 8% 이내
+      expect(Math.abs(p.est - p.truth)).toBeLessThan(0.08 * dur);
+    }
   });
 
   test('noisy room', () => {

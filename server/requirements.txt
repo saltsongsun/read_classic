@@ -1,0 +1,5 @@
+# 악보 인식 서버. homr 는 AGPL-3.0 (별도 프로세스로 실행)
+homr==0.7.0  # PyPI 판. 음표별 imgpos 주석은 이후 버전부터 (앱은 둘 다 지원)
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+python-multipart>=0.0.9

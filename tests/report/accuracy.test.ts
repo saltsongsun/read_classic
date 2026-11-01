@@ -16,6 +16,18 @@ test('tempo × timbre', () => {
   }
 }, 600000);
 
+test('콩쿠르 홀 (잔향·페달·박수)', () => {
+  const ode = loadSample('ode-to-joy');
+  const bach = loadSample('bach-prelude-c');
+  show('바흐 마른 소리', run(bach, { timbre: 'piano', tempoWobble: 0.1, seed: 4 }));
+  show('바흐 페달', run(bach, { timbre: 'piano', pedalBeats: 2, tempoWobble: 0.1, seed: 4 }));
+  show('바흐 홀 잔향', run(bach, { timbre: 'piano', reverb: 0.5, tempoWobble: 0.1, seed: 4 }));
+  show('바흐 페달 + 홀 잔향', run(bach, { timbre: 'piano', reverb: 0.5, pedalBeats: 2, tempoWobble: 0.1, seed: 4 }));
+  show('환희의 송가 페달 + 홀', run(ode, { timbre: 'piano', reverb: 0.5, pedalBeats: 4, tempoWobble: 0.08, seed: 3 }));
+  show('환희의 송가 느리게 + 페달 + 홀', run(ode, { timbre: 'piano', bpm: 75, reverb: 0.6, pedalBeats: 2, tempoWobble: 0.08, seed: 6 }));
+  show('박수 뒤 시작', run(ode, { timbre: 'piano', leadIn: 4, applause: [[0.3, 3.2, 0.08]], reverb: 0.4, tempoWobble: 0.08, seed: 3 }));
+}, 900000);
+
 test('연습 상황', () => {
   const ode = loadSample('ode-to-joy');
   const all = playSegments(ode, [[0, 64]]);

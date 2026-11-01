@@ -17,6 +17,12 @@ export interface SynthOptions {
   jitter?: number;
   /** 앞에 붙는 무음 (초). */
   leadIn?: number;
+  /** 피아노 오른쪽 페달: 이 박 간격으로 페달을 바꾼다고 보고, 그때까지 음을 끌어 준다. */
+  pedalBeats?: number;
+  /** 홀 잔향 (0 = 없음, 0.5 = 객석 뒤쪽 정도). */
+  reverb?: number;
+  /** [시작 초, 길이 초, 세기] — 박수 같은 넓은 대역 잡음 */
+  applause?: Array<[number, number, number]>;
 }
 
 export function mulberry32(seed: number): () => number {
@@ -60,15 +66,18 @@ export function synthesize(notes: RawNote[], opts: SynthOptions): { samples: Flo
   const sr = opts.sampleRate ?? 44100;
   const maxBeat = Math.max(...notes.map((n) => n.onset + n.duration));
   const timeOf = makeTimeMap(maxBeat, opts);
-  const total = Math.ceil((timeOf(maxBeat) + 1.5) * sr);
+  const total = Math.ceil((timeOf(maxBeat) + (opts.reverb ? 3 : 1.5)) * sr);
   const out = new Float64Array(total);
   const rnd = mulberry32((opts.seed ?? 1) * 7919);
   const timbre = opts.timbre ?? 'piano';
   const jitter = opts.jitter ?? 0.01;
 
+  const pedal = opts.pedalBeats;
   for (const note of notes) {
     const t0 = timeOf(note.onset) + (rnd() - 0.5) * 2 * jitter;
-    const t1 = timeOf(note.onset + note.duration);
+    let endBeat = note.onset + note.duration;
+    if (pedal) endBeat = Math.max(endBeat, (Math.floor(note.onset / pedal + 1e-9) + 1) * pedal - 0.05);
+    const t1 = timeOf(endBeat);
     const f0 = 440 * Math.pow(2, (note.midi - 69) / 12);
     const vel = 0.6 + 0.4 * rnd();
     const start = Math.max(0, Math.floor(t0 * sr));
@@ -101,6 +110,16 @@ export function synthesize(notes: RawNote[], opts: SynthOptions): { samples: Flo
       out[i] += 0.12 * vel * env * s;
     }
   }
+  if (opts.reverb) schroederReverb(out, sr, opts.reverb);
+  for (const [start, len, level] of opts.applause ?? []) {
+    const a = Math.floor(start * sr);
+    const b = Math.min(total, Math.floor((start + len) * sr));
+    for (let i = Math.max(0, a); i < b; i++) {
+      // 손뼉: 짧은 잡음 덩어리가 무작위로 겹친 소리
+      const clap = rnd() < 0.002 ? 1 : 0;
+      out[i] += level * (0.4 * (rnd() * 2 - 1) + clap * (rnd() * 2 - 1) * 2);
+    }
+  }
   const noise = opts.noise ?? 0.002;
   for (let i = 0; i < total; i++) out[i] += noise * (rnd() * 2 - 1);
   const f32 = new Float32Array(total);
@@ -109,6 +128,42 @@ export function synthesize(notes: RawNote[], opts: SynthOptions): { samples: Flo
   const g = peak > 0.95 ? 0.95 / peak : 1;
   for (let i = 0; i < total; i++) f32[i] = out[i] * g;
   return { samples: f32, timeOf, sampleRate: sr };
+}
+
+/**
+ * 간단한 슈뢰더 잔향 (병렬 콤 필터 4개 + 직렬 올패스 2개). 잔향 시간 약 2초.
+ * wet 은 잔향 소리의 비율.
+ */
+function schroederReverb(x: Float64Array, sr: number, wet: number): void {
+  const combs = [0.0297, 0.0371, 0.0411, 0.0437].map((d) => Math.round(d * sr));
+  const rt60 = 2.0;
+  const wetBuf = new Float64Array(x.length);
+  for (const d of combs) {
+    const g = Math.pow(10, (-3 * d) / (sr * rt60));
+    const buf = new Float64Array(d);
+    let lp = 0;
+    let k = 0;
+    for (let i = 0; i < x.length; i++) {
+      const y = buf[k];
+      lp = 0.7 * y + 0.3 * lp; // 고음이 먼저 줄어드는 홀
+      buf[k] = x[i] + g * lp;
+      wetBuf[i] += y / combs.length;
+      k = (k + 1) % d;
+    }
+  }
+  for (const d of [Math.round(0.005 * sr), Math.round(0.0017 * sr)]) {
+    const buf = new Float64Array(d);
+    let k = 0;
+    const g = 0.7;
+    for (let i = 0; i < x.length; i++) {
+      const delayed = buf[k];
+      const v = wetBuf[i] + g * delayed;
+      wetBuf[i] = delayed - g * v;
+      buf[k] = v;
+      k = (k + 1) % d;
+    }
+  }
+  for (let i = 0; i < x.length; i++) x[i] = (1 - wet) * x[i] + wet * 2.5 * wetBuf[i];
 }
 
 /** 16-bit PCM mono WAV 파일 바이트를 만든다. */

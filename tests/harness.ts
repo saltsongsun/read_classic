@@ -1,6 +1,7 @@
 // 합성 오디오로 추적기를 돌려 정확도를 재는 도구.
 import { FeatureExtractor, LevelGate } from '../src/audio/features';
 import { buildEvents, type RawNote, type RawStep } from '../src/follow/build';
+import { ProgressEstimator } from '../src/follow/progress';
 import { ScoreFollower } from '../src/follow/tracker';
 import type { ScoreEvent } from '../src/follow/types';
 // @ts-expect-error -- 순수 JS 모듈
@@ -43,9 +44,15 @@ export interface RunResult {
   exact: number;
   /** ±1 이벤트 이내 비율 */
   near: number;
+  /** 마디가 맞은 비율 */
+  measureNear: number;
   finalIndex: number;
   maxIndex: number;
   trace: Array<{ t: number; idx: number; truth: number }>;
+  /** 남은 시간 추정 기록: 추정값과 실제 남은 시간 (초) */
+  remaining: Array<{ t: number; est: number; truth: number; started: boolean }>;
+  /** 실제 연주 끝 시각 (마지막 음이 끝나는 때) */
+  endTime: number;
 }
 
 /** 실제로 연주할 음. origOnset 은 악보상의 위치 (정답 계산용). */
@@ -56,6 +63,8 @@ export interface RunOptions extends Partial<SynthOptions> {
   play?: PlayedNote[];
   trackerBpm?: number;
   startAt?: number;
+  /** 남은 시간 추정에 줄 예상 연주 시간 (초) */
+  expectedTotalSec?: number;
 }
 
 export function run(score: SampleScore, opts: RunOptions): RunResult {
@@ -66,6 +75,10 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
   const gate = new LevelGate();
   const tracker = new ScoreFollower(events, { hopSec: fx.hopSec, bpm: opts.trackerBpm ?? score.bpm });
   if (opts.startAt !== undefined) tracker.setPosition(opts.startAt);
+  const progress = new ProgressEstimator(events, { scoreBpm: opts.trackerBpm ?? score.bpm, expectedTotalSec: opts.expectedTotalSec });
+  const lastPlayed = play.reduce((m, n) => Math.max(m, n.onset + n.duration), 0);
+  const endTime = timeOf(lastPlayed);
+  const remaining: RunResult['remaining'] = [];
   const onsetTimes = events.map((e) => timeOfEvent(e, score, timeOf));
   // 연주된 음 시작 시각 → 악보 이벤트 번호
   const scoreOnsets = [...new Set(score.notes.map((n) => n.onset))].sort((a, b) => a - b);
@@ -87,6 +100,7 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
   const trace: RunResult['trace'] = [];
   let exact = 0;
   let near = 0;
+  let measureOk = 0;
   let voicedCount = 0;
   let idx = -1;
   let maxIndex = -1;
@@ -97,6 +111,9 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
       const voiced = gate.update(f.rms, f.flatness);
       const st = tracker.update(f, voiced);
       idx = st.index;
+      progress.update(f.time, st.index, voiced);
+      const snap = progress.snapshot();
+      remaining.push({ t: f.time, est: snap.remainingSec, truth: Math.max(0, endTime - f.time), started: snap.started });
       maxIndex = Math.max(maxIndex, idx);
       for (let j = 0; j <= idx; j++) if (Number.isNaN(reached[j])) reached[j] = f.time;
       const truth = truthOf(f.time - 0.05);
@@ -105,6 +122,7 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
         voicedCount++;
         if (idx === truth) exact++;
         if (Math.abs(idx - truth) <= 1) near++;
+        if (idx >= 0 && events[idx].measure === events[truth].measure) measureOk++;
       }
     }
   }
@@ -112,9 +130,12 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
     lags: reached.map((t, j) => t - onsetTimes[j]),
     exact: exact / Math.max(1, voicedCount),
     near: near / Math.max(1, voicedCount),
+    measureNear: measureOk / Math.max(1, voicedCount),
     finalIndex: idx,
     maxIndex,
     trace,
+    remaining,
+    endTime,
   };
 }
 
@@ -132,7 +153,7 @@ export function median(xs: number[]): number {
 
 /** 한 줄 요약. linear=false 면 (되돌아가기 등) 악보 순서 기준 지연 통계는 의미가 없어 뺀다. */
 export function summarize(r: RunResult, linear = true): string {
-  const base = `exact=${(r.exact * 100).toFixed(1)}% near=${(r.near * 100).toFixed(1)}%`;
+  const base = `exact=${(r.exact * 100).toFixed(1)}% near=${(r.near * 100).toFixed(1)}% measure=${(r.measureNear * 100).toFixed(1)}%`;
   const fin = `final=${r.finalIndex}/${r.lags.length - 1}`;
   if (!linear) return `${base} ${fin}`;
   const lags = r.lags.filter((x) => Number.isFinite(x));
