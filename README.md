@@ -47,6 +47,8 @@ uvicorn server.app:app --port 8000                       # → http://localhost:
 
 **휴대폰·태블릿에서 쓰려면** HTTPS 주소가 필요합니다. 위 Docker 이미지를 HTTPS 를 주는 곳(Google Cloud Run, Render, Fly.io 등)에 올리고 그 주소를 휴대폰으로 여는 것이 가장 간단합니다. 웹 앱만 따로(GitHub Pages 등) 올렸다면 **설정 → 악보 인식 서버**에 서버 주소를 넣고, 서버의 `ALLOWED_ORIGINS` 에 웹 앱 주소를 넣어 주세요.
 
+**GitHub Pages**: 저장소 *Settings → Pages → Source* 가 **GitHub Actions** 이면, 기본 브랜치에 올릴 때마다 `.github/workflows/pages.yml` 이 웹 앱을 `https://<사용자>.github.io/<저장소>/` 로 배포합니다. Pages 에는 웹 앱만 올라가므로 MusicXML 악보·예제·마이크 따라가기·남은 시간은 바로 되고, 사진·PDF 인식은 위의 인식 서버 주소를 설정에 넣어야 합니다.
+
 ```bash
 npm run dev        # 개발 서버 http://localhost:5173 (/api 는 localhost:8000 인식 서버로 넘김)
 ```
