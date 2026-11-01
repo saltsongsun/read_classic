@@ -29,7 +29,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-          - os: macos-14 # Apple Silicon (M1~)
+          - os: macos-latest # Apple Silicon (M1~)
           - os: ubuntu-22.04
     runs-on: ${{ matrix.os }}
     env:
