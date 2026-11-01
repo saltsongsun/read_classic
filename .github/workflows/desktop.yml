@@ -1,6 +1,6 @@
 # 노트북용 Read Classic 묶음 만들기 (Windows / macOS / Linux)
-# - Actions 탭 → "Laptop app" → Run workflow 로 실행하면 각 운영체제용 zip 을 만들고,
-#   실제로 실행해서 (인터넷을 막은 상태로) 예제 사진을 인식해 본다.
+# - 노트북용 코드(desktop/, server/)가 바뀌어 올라오거나, Actions 탭 → "Laptop app" → Run workflow 로
+#   실행하면 각 운영체제용 zip 을 만들고, 실제로 실행해서 (인터넷을 막은 상태로) 예제 사진을 인식해 본다.
 # - "release" 를 체크하거나 v* 태그를 올리면 GitHub 릴리스에도 올린다 (로그인 없이 내려받기 가능).
 name: Laptop app
 
@@ -12,7 +12,12 @@ on:
         type: boolean
         default: false
   push:
-    tags: ['v*']
+    branches: ['**']
+    tags: ['v*'] # 태그에는 아래 paths 가 적용되지 않는다
+    paths:
+      - 'desktop/**'
+      - 'server/**'
+      - '.github/workflows/desktop.yml'
 
 permissions:
   contents: write
