@@ -30,9 +30,27 @@
 
 > 마이크는 보안상 **HTTPS** 주소나 `localhost` 에서만 켜집니다.
 
-## 실행
+## 노트북에 설치해서 쓰기 (인터넷 없이)
 
-사진·PDF 인식에는 **악보 인식 서버**가 필요합니다(오픈소스 OMR 엔진 [homr](https://github.com/liebharc/homr) 사용). 웹 앱과 서버를 한 번에 띄우는 방법:
+Python 이나 Docker 없이, 압축 파일을 풀고 더블클릭하면 됩니다. 설치 뒤에는 **인터넷이 없어도** 사진·PDF 악보 인식부터 연주 따라가기, 남은 시간까지 모두 노트북 안에서 됩니다.
+
+1. 저장소의 **Releases**(또는 Actions → *Laptop app* 실행 결과의 Artifacts)에서 운영체제에 맞는 파일을 받습니다.
+   - Windows: `ReadClassic-windows-x64.zip`
+   - Mac (M1 이후): `ReadClassic-macos-arm64.zip`
+   - Linux: `ReadClassic-linux-x64.zip`
+2. 압축을 풀고 `ReadClassic` 폴더의 **read-classic**(Windows 는 `read-classic.exe`)를 더블클릭합니다.
+   검은 창이 뜨고 잠시 뒤 브라우저(Chrome·Edge 권장)에 `http://localhost:47800` 으로 앱이 열립니다. 검은 창을 닫으면 꺼집니다.
+3. 처음 한 번:
+   - Windows: "Windows의 PC 보호" 창이 나오면 **추가 정보 → 실행**.
+   - Mac: "확인되지 않은 개발자" 경고가 나오면 터미널에서 `xattr -dr com.apple.quarantine ` 뒤에 `ReadClassic` 폴더를 끌어다 놓고 실행한 뒤 다시 더블클릭.
+
+악보 인식은 노트북 CPU 로 한 쪽에 10~40초 걸립니다. 인식한 악보는 그 노트북의 브라우저에 저장되니 같은 브라우저로 여세요. 지우려면 폴더를 통째로 지우면 됩니다. 압축 파일은 운영체제별로 약 250~300MB 입니다(인식 모델 포함).
+
+묶음을 직접 만들려면: `npm ci && npm run build`, `pip install -r desktop/requirements.txt && homr --init`, `python desktop/build.py` → `desktop/out/*.zip`. 만든 묶음은 `python desktop/smoke_test.py` 로 (인터넷을 막은 상태로) 실행해서 예제 사진 인식까지 확인합니다.
+
+## 서버로 실행
+
+사진·PDF 인식에는 **악보 인식 서버**가 필요합니다(오픈소스 OMR 엔진 [homr](https://github.com/liebharc/homr) 사용). 노트북용 묶음에는 이 서버가 들어 있습니다. 직접 띄우는 방법:
 
 ```bash
 # 1) Docker (권장)
@@ -41,7 +59,7 @@ docker run -p 8000:8000 read-classic          # → http://localhost:8000
 
 # 2) 직접 (Python 3.11~3.13, Node 22)
 npm install && npm run build
-pip install -r server/requirements.txt && homr --init   # 인식 모델 약 90MB 내려받기
+pip install -r server/requirements.txt && homr --init   # 인식 모델 약 190MB 내려받기
 uvicorn server.app:app --port 8000                       # → http://localhost:8000
 ```
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import os
 import shlex
+import subprocess
 import tempfile
 import time
 from importlib import metadata
@@ -57,8 +58,6 @@ def _engine_version() -> str | None:
 
 def _supports(flag: str) -> bool:
     """설치된 homr 가 이 옵션을 아는지 (버전마다 옵션이 다르다)."""
-    import subprocess
-
     try:
         out = subprocess.run([*HOMR_CMD, "--help"], capture_output=True, text=True, timeout=60).stdout
     except Exception:
@@ -116,20 +115,21 @@ async def omr(image: UploadFile) -> JSONResponse:
         src.write_bytes(data)
         started = time.monotonic()
         async with _slots:
-            proc = await asyncio.create_subprocess_exec(
-                *HOMR_CMD,
-                *_homr_args(),
-                str(src),
-                cwd=tmp,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
+            # 일반 스레드에서 실행: 운영체제/이벤트 루프 종류와 상관없이 동작 (Windows 포함)
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
             try:
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=OMR_TIMEOUT)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
+                proc = await asyncio.to_thread(
+                    subprocess.run,
+                    [*HOMR_CMD, *_homr_args(), str(src)],
+                    cwd=tmp,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    timeout=OMR_TIMEOUT,
+                    env=env,
+                )
+            except subprocess.TimeoutExpired:
                 raise HTTPException(504, "악보 인식 시간이 너무 오래 걸려 중단했습니다.") from None
+        out = proc.stdout
         result = src.with_suffix(".musicxml")
         if proc.returncode != 0 or not result.exists():
             tail = (out or b"").decode("utf-8", "replace").strip().splitlines()[-5:]

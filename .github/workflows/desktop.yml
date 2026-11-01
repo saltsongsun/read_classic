@@ -1,0 +1,76 @@
+# 노트북용 Read Classic 묶음 만들기 (Windows / macOS / Linux)
+# - Actions 탭 → "Laptop app" → Run workflow 로 실행하면 각 운영체제용 zip 을 만들고,
+#   실제로 실행해서 (인터넷을 막은 상태로) 예제 사진을 인식해 본다.
+# - "release" 를 체크하거나 v* 태그를 올리면 GitHub 릴리스에도 올린다 (로그인 없이 내려받기 가능).
+name: Laptop app
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'GitHub 릴리스로 올리기'
+        type: boolean
+        default: false
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: macos-14 # Apple Silicon (M1~)
+          - os: ubuntu-22.04
+    runs-on: ${{ matrix.os }}
+    env:
+      PYTHONUTF8: '1' # Windows 에서 한글 출력
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r desktop/requirements.txt
+      - name: 인식 모델 내려받기
+        run: homr --init
+      - name: 묶음 만들기
+        run: python desktop/build.py
+      - name: 실행해서 확인 (인터넷 차단 흉내)
+        run: python desktop/smoke_test.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ReadClassic-${{ runner.os }}
+          path: desktop/out/*.zip
+          compression-level: 0
+          retention-days: 30
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: 릴리스 올리기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('laptop-{0}', github.run_number) }}
+        run: |
+          gh release create "$TAG" out/*.zip \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "Read Classic 노트북용 ($TAG)" \
+            --notes "노트북에 설치해서 인터넷 없이 쓰는 Read Classic 입니다. 운영체제에 맞는 zip 을 내려받아 풀고, 안의 사용법.txt 를 보세요."

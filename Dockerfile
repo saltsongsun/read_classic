@@ -14,7 +14,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv
 COPY server/requirements.txt server/requirements.txt
-# 인식 모델(약 90MB)을 이미지에 미리 받아 둔다
+# 인식 모델(약 190MB)을 이미지에 미리 받아 둔다
 RUN pip install --no-cache-dir -r server/requirements.txt && homr --init
 COPY server/ server/
 COPY --from=web /app/dist dist

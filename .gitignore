@@ -7,3 +7,5 @@ tests/fixtures/
 tests/e2e/out/
 **/__pycache__/
 *.pyc
+desktop/build/
+desktop/out/

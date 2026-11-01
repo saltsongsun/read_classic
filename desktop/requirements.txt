@@ -1,0 +1,6 @@
+# 노트북용 묶음을 만들 때 필요한 것 (server/requirements.txt 와 같은 엔진 + 묶는 도구)
+homr==0.7.0
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+python-multipart>=0.0.9
+pyinstaller>=6.10,<7
