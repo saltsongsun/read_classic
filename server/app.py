@@ -22,11 +22,12 @@ import os
 import shlex
 import subprocess
 import tempfile
+import threading
 import time
 from importlib import metadata
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -93,9 +94,21 @@ def _read_staffs(path: Path) -> list[list[float]]:
     return staffs
 
 
+DESKTOP = os.environ.get("READ_CLASSIC_DESKTOP") == "1"  # 노트북용 앱으로 실행 중인지
+
+
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True, "engine": "homr", "version": _engine_version()}
+    return {"ok": True, "engine": "homr", "version": _engine_version(), "desktop": DESKTOP}
+
+
+@app.post("/api/shutdown")
+async def shutdown(request: Request) -> dict:
+    """노트북용 앱의 "앱 끄기" 버튼. 이 컴퓨터 안에서 온 요청만 받는다."""
+    if not DESKTOP or (request.client and request.client.host not in ("127.0.0.1", "::1", "localhost")):
+        raise HTTPException(404, "Not Found")
+    threading.Timer(0.5, lambda: os._exit(0)).start()
+    return {"ok": True}
 
 
 @app.post("/api/omr")

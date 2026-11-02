@@ -6,7 +6,7 @@ import { ScoreFollower } from './follow/tracker';
 import type { ScoreEvent } from './follow/types';
 import { layoutEvents } from './score/imageLayout';
 import { ImageScoreView, type PageImage } from './score/imageView';
-import { checkServer, imageToPage, isImageOrPdf, isPdf, pdfToPages, recognizePage, type OmrPage } from './score/importImages';
+import { checkServer, imageToPage, isImageOrPdf, isPdf, LAPTOP_APP, pdfToPages, recognizePage, type OmrPage } from './score/importImages';
 import * as lib from './score/library';
 import { combinePages, eventsFromSteps, parseMusicXML, toSteps } from './score/musicxml';
 import { ScoreView } from './score/view';
@@ -64,6 +64,12 @@ const el = {
   showTicks: $<HTMLInputElement>('showTicks'),
   autoScroll: $<HTMLInputElement>('autoScroll'),
   toast: $('toast'),
+  getApp: $('getApp'),
+  getAppWin: $<HTMLAnchorElement>('getAppWin'),
+  getAppMac: $<HTMLAnchorElement>('getAppMac'),
+  getAppPage: $<HTMLAnchorElement>('getAppPage'),
+  quitRow: $('quitRow'),
+  quitApp: $<HTMLButtonElement>('quitApp'),
   importDialog: $<HTMLDialogElement>('importDialog'),
   importTitle: $<HTMLInputElement>('importTitle'),
   importPages: $<HTMLOListElement>('importPages'),
@@ -946,7 +952,29 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ---------- 시작 ----------
+/** 노트북용 앱으로 열렸으면 "앱 끄기"를, 아니면 "노트북용 앱 받기"를 보여 준다. */
+async function setupAppMode(): Promise<void> {
+  el.getAppWin.href = LAPTOP_APP.windows;
+  el.getAppMac.href = LAPTOP_APP.mac;
+  el.getAppPage.href = LAPTOP_APP.page;
+  const st = await checkServer(prefs.omrServer);
+  el.quitRow.hidden = !st.desktop;
+  el.getApp.hidden = st.ok;
+}
+el.quitApp.addEventListener('click', async () => {
+  if (!confirm('Read Classic 을 끌까요? 다시 쓰려면 바탕화면(또는 응용 프로그램)의 아이콘을 누르세요.')) return;
+  stopListening();
+  try {
+    await fetch('/api/shutdown', { method: 'POST' });
+  } catch {
+    /* 이미 꺼짐 */
+  }
+  document.body.innerHTML =
+    '<main style="font:16px/1.6 system-ui,sans-serif;padding:48px 24px;text-align:center"><h1 style="font-size:22px">Read Classic 을 껐어요</h1><p>이 창은 닫아도 됩니다. 다시 쓰려면 아이콘을 누르세요.</p></main>';
+});
+
 async function init(): Promise<void> {
+  void setupAppMode();
   await loadSampleIndex();
   await renderLibrary();
   const params = new URLSearchParams(location.search);

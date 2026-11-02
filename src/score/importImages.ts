@@ -83,20 +83,31 @@ function api(base: string, path: string): string {
 export interface ServerStatus {
   ok: boolean;
   message: string;
+  /** 노트북용 앱(이 컴퓨터 안의 서버)으로 실행 중인지 */
+  desktop: boolean;
 }
+
+/** 노트북용 앱 내려받기 (항상 가장 최근 판) */
+export const LAPTOP_APP = {
+  page: 'https://github.com/saltsongsun/read_classic/releases/latest',
+  windows: 'https://github.com/saltsongsun/read_classic/releases/latest/download/ReadClassic-Windows-Setup.exe',
+  mac: 'https://github.com/saltsongsun/read_classic/releases/latest/download/ReadClassic-Mac.dmg',
+};
 
 export async function checkServer(base: string): Promise<ServerStatus> {
   try {
     const res = await fetch(api(base, '/api/health'), { cache: 'no-store' });
-    if (!res.ok) return { ok: false, message: `악보 인식 서버 응답 오류 (${res.status})` };
+    if (!res.ok) throw new Error(String(res.status));
     const j = await res.json();
-    return { ok: true, message: `악보 인식 서버 연결됨 (homr ${j.version ?? ''})`.trim() };
+    if (!j.engine) throw new Error('not a recognition server');
+    return { ok: true, desktop: !!j.desktop, message: j.desktop ? '사진·PDF 악보를 이 컴퓨터에서 바로 인식해요' : `악보 인식 서버 연결됨 (homr ${j.version ?? ''})`.trim() };
   } catch {
     return {
       ok: false,
+      desktop: false,
       message: base.trim()
         ? `악보 인식 서버(${base})에 연결할 수 없어요.`
-        : '악보 인식 서버가 없어요. 설정에서 서버 주소를 넣거나, 서버와 함께 실행해 주세요.',
+        : '사진·PDF 악보 인식은 노트북용 앱에서 할 수 있어요. 왼쪽 목록의 "노트북용 앱 받기"를 눌러 설치해 주세요.',
     };
   }
 }

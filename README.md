@@ -32,21 +32,20 @@
 
 ## 노트북에 설치해서 쓰기 (인터넷 없이)
 
-Python 이나 Docker 없이, 압축 파일을 풀고 더블클릭하면 됩니다. 설치 뒤에는 **인터넷이 없어도** 사진·PDF 악보 인식부터 연주 따라가기, 남은 시간까지 모두 노트북 안에서 됩니다.
+설치 뒤에는 **인터넷이 없어도** 사진·PDF 악보 인식부터 연주 따라가기, 남은 시간까지 모두 노트북 안에서 됩니다.
+웹판(GitHub Pages) 왼쪽 아래의 **노트북용 앱 받기** 버튼이나 아래 링크로 받으세요 (항상 최신판).
 
-1. 저장소의 **Releases**(또는 Actions → *Laptop app* 실행 결과의 Artifacts)에서 운영체제에 맞는 파일을 받습니다.
-   - Windows: `ReadClassic-windows-x64.zip`
-   - Mac (M1 이후): `ReadClassic-macos-arm64.zip`
-   - Linux: `ReadClassic-linux-x64.zip`
-2. 압축을 풀고 `ReadClassic` 폴더의 **read-classic**(Windows 는 `read-classic.exe`)를 더블클릭합니다.
-   검은 창이 뜨고 잠시 뒤 브라우저(Chrome·Edge 권장)에 `http://localhost:47800` 으로 앱이 열립니다. 검은 창을 닫으면 꺼집니다.
-3. 처음 한 번:
-   - Windows: "Windows의 PC 보호" 창이 나오면 **추가 정보 → 실행**.
-   - Mac: "확인되지 않은 개발자" 경고가 나오면 터미널에서 `xattr -dr com.apple.quarantine ` 뒤에 `ReadClassic` 폴더를 끌어다 놓고 실행한 뒤 다시 더블클릭.
+| 운영체제 | 받기 | 설치 |
+| --- | --- | --- |
+| Windows | [ReadClassic-Windows-Setup.exe](https://github.com/saltsongsun/read_classic/releases/latest/download/ReadClassic-Windows-Setup.exe) | 실행 → **설치**. "Windows의 PC 보호"가 나오면 **추가 정보 → 실행**. 바탕화면에 **Read Classic** 아이콘이 생깁니다. |
+| Mac (M1 이후) | [ReadClassic-Mac.dmg](https://github.com/saltsongsun/read_classic/releases/latest/download/ReadClassic-Mac.dmg) | 열어서 **Read Classic** 을 **Applications** 로 끌어다 놓기. 처음에 안 열리면 **시스템 설정 → 개인정보 보호 및 보안 → 그래도 열기**. |
+| Linux | [ReadClassic-Linux.zip](https://github.com/saltsongsun/read_classic/releases/latest/download/ReadClassic-Linux.zip) | 풀고 `./read-classic` |
 
-악보 인식은 노트북 CPU 로 한 쪽에 10~40초 걸립니다. 인식한 악보는 그 노트북의 브라우저에 저장되니 같은 브라우저로 여세요. 지우려면 폴더를 통째로 지우면 됩니다. 압축 파일은 운영체제별로 약 250~300MB 입니다(인식 모델 포함).
+- 아이콘을 누르면 브라우저에 앱이 열립니다(`http://localhost:47800`). 창은 따로 뜨지 않고 뒤에서 돕니다.
+- 끄기: 앱 오른쪽 위 **설정 → 앱 끄기**. 컴퓨터를 끄면 같이 꺼집니다.
+- 인식한 악보는 그 노트북의 브라우저에 저장됩니다. 문제가 생기면 기록 파일을 봅니다: Windows `%LOCALAPPDATA%\ReadClassic\read-classic.log`, Mac `~/Library/Logs/ReadClassic/`.
 
-묶음을 직접 만들려면: `npm ci && npm run build`, `pip install -r desktop/requirements.txt && homr --init`, `python desktop/build.py` → `desktop/out/*.zip`. 만든 묶음은 `python desktop/smoke_test.py` 로 (인터넷을 막은 상태로) 실행해서 예제 사진 인식까지 확인합니다.
+설치 파일은 `.github/workflows/desktop.yml` 이 Windows·Mac·Linux 에서 각각 만들고, **실제로 설치해서 인터넷을 막은 채 예제 사진을 인식**해 본 뒤 `v*` 태그를 올리면 릴리스로 올립니다. 직접 만들려면 `npm ci && npm run build`, `pip install -r desktop/requirements.txt && homr --init`, `python desktop/build.py` (Windows 는 Inno Setup 6 필요) → `desktop/out/`.
 
 ## 서버로 실행
 

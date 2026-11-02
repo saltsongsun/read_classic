@@ -25,8 +25,13 @@ PORT = 47911
 
 
 def default_exe() -> Path:
-    name = "read-classic.exe" if platform.system() == "Windows" else "read-classic"
-    return ROOT / "desktop" / "build" / "dist" / "ReadClassic" / name
+    dist = ROOT / "desktop" / "build" / "dist"
+    system = platform.system()
+    if system == "Windows":
+        return dist / "ReadClassic" / "read-classic.exe"
+    if system == "Darwin":
+        return dist / "Read Classic.app" / "Contents" / "MacOS" / "read-classic"
+    return dist / "ReadClassic" / "read-classic"
 
 
 def get(path: str) -> bytes:
@@ -57,6 +62,7 @@ def main() -> None:
     for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"):
         env[k] = "http://127.0.0.1:9"
     env["NO_PROXY"] = env["no_proxy"] = "127.0.0.1,localhost"
+    env["READ_CLASSIC_NO_DIALOG"] = "1"
     proc = subprocess.Popen([str(exe), "--no-browser", "--port", str(PORT)], env=env)
     try:
         for _ in range(240):
@@ -79,7 +85,13 @@ def main() -> None:
         print(f"인식: {time.time() - t0:.1f}초, 음표 {notes}개, 줄 {len(result['staffs'])}개")
         assert notes >= 55, "음표를 충분히 인식하지 못했습니다"
         assert len(result["staffs"]) == 3, "줄 위치가 3개가 아닙니다"
+        assert health.get("desktop") is True, "노트북 앱 표시(desktop)가 꺼져 있습니다"
         print("OK: 노트북용 묶음이 인터넷 없이 동작합니다")
+        # "앱 끄기" 로 정말 꺼지는지
+        req = urllib.request.Request(f"http://127.0.0.1:{PORT}/api/shutdown", data=b"", method="POST")
+        urllib.request.urlopen(req, timeout=10).read()
+        proc.wait(timeout=20)
+        print("OK: 앱 끄기로 종료됨")
     finally:
         proc.terminate()
         try:

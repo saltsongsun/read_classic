@@ -19,6 +19,12 @@ def test_health():
     r = client.get("/api/health")
     assert r.status_code == 200
     assert r.json()["engine"] == "homr"
+    assert r.json()["desktop"] is False
+
+
+def test_shutdown_only_in_desktop_app():
+    # 서버로 띄웠을 때는 끄기 요청을 받지 않는다
+    assert client.post("/api/shutdown").status_code == 404
 
 
 def test_recognises_a_page():

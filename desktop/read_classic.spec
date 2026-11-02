@@ -2,10 +2,15 @@
 # PyInstaller 설정: Python + homr(인식 모델 포함) + 서버 + 웹 앱을 한 폴더로 묶는다.
 # python desktop/build.py 가 이 파일로 빌드한다.
 import os
+import sys
 
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = os.path.abspath(os.path.join(SPECPATH, '..'))
+IS_WIN = sys.platform == 'win32'
+IS_MAC = sys.platform == 'darwin'
+VERSION = os.environ.get('READ_CLASSIC_VERSION', '1.0.0')
+ICON = os.path.join(SPECPATH, 'icons', 'read-classic.ico' if IS_WIN else 'read-classic.icns')
 SKIP_ENGINES = ('openvino', 'paddle', 'pytorch', 'tensorrt', 'mnn')
 
 datas = [(os.path.join(ROOT, 'dist'), 'web')]
@@ -35,7 +40,23 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='read-classic',
-    console=True,  # 검은 창: 실행 상태를 보여 주고, 닫으면 종료된다
+    # Windows·Mac 은 검은 창 없이 뒤에서 돈다 (끄기: 앱 설정 → 앱 끄기). Linux 는 터미널에서 쓰기 좋게 창을 둔다.
+    console=not (IS_WIN or IS_MAC),
+    icon=ICON if (IS_WIN or IS_MAC) else None,
     upx=False,
 )
 coll = COLLECT(exe, a.binaries, a.datas, upx=False, name='ReadClassic')
+if IS_MAC:
+    app = BUNDLE(
+        coll,
+        name='Read Classic.app',
+        icon=ICON,
+        bundle_identifier='io.github.saltsongsun.readclassic',
+        version=VERSION,
+        info_plist={
+            'CFBundleDisplayName': 'Read Classic',
+            'CFBundleShortVersionString': VERSION,
+            'LSUIElement': True,  # Dock 아이콘 없이 뒤에서 실행 (브라우저가 화면)
+            'LSMinimumSystemVersion': '11.0',
+        },
+    )

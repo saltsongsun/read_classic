@@ -49,6 +49,15 @@
           <p class="lib-empty" id="userEmpty">아직 올린 악보가 없어요. 악보 PDF 나 사진을 올리면 인식해서 저장해요.</p>
           <h2 class="lib-heading">예제 악보</h2>
           <ul class="lib-list" id="sampleList"></ul>
+          <div class="get-app" id="getApp" hidden>
+            <p class="get-app-title">노트북용 앱 받기</p>
+            <p class="get-app-text">사진·PDF 악보 인식까지 인터넷 없이 되는 설치판이에요.</p>
+            <div class="get-app-links">
+              <a class="btn primary" id="getAppWin" href="#">Windows</a>
+              <a class="btn" id="getAppMac" href="#">Mac</a>
+            </div>
+            <a class="get-app-more" id="getAppPage" href="#" target="_blank" rel="noopener">설치 방법 보기</a>
+          </div>
           <p class="lib-note" id="storageNote" hidden>이 브라우저에서는 악보를 영구 저장할 수 없어 창을 닫으면 사라집니다.</p>
         </div>
       </aside>
@@ -106,6 +115,11 @@
           <label for="autoScroll">자동 스크롤</label>
           <input type="checkbox" id="autoScroll" checked />
           <span class="settings-val">연주 위치를 화면 위쪽에 유지</span>
+        </div>
+        <div class="settings-row" id="quitRow" hidden>
+          <label>노트북 앱</label>
+          <button type="button" class="btn" id="quitApp">앱 끄기</button>
+          <span class="settings-val">뒤에서 돌고 있는 Read Classic 을 끕니다 (다시 쓰려면 아이콘을 누르세요)</span>
         </div>
         <p class="settings-help">악보를 누르면 그 음부터 따라갑니다. 키보드: <kbd>Space</kbd> 듣기/멈춤 · <kbd>←</kbd><kbd>→</kbd> 한 음씩 · <kbd>Home</kbd> 처음으로</p>
       </section>
