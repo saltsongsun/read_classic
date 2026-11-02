@@ -58,13 +58,18 @@ const server = await createServer({ root, logLevel: 'error', server: { port: 519
 await server.listen();
 const base = server.resolvedUrls.local[0];
 
+// mode: 'notes' = 음을 듣고 따라가기, 'beats' = 마디·박자로 계산 (앱 기본)
 const CASES = [
-  { id: 'ode-to-joy', minNear: 0.85 },
-  { id: 'bach-prelude-c', minNear: 0.8 },
+  { id: 'ode-to-joy', mode: 'notes', minNear: 0.85 },
+  { id: 'bach-prelude-c', mode: 'notes', minNear: 0.8 },
   // AI 음 인식(88건반)을 켜고: 웹 워커 + wasm 모델이 실제 브라우저에서 돌아가는지
-  { id: 'bach-prelude-c', ai: true, minNear: 0.8 },
+  { id: 'bach-prelude-c', mode: 'notes', ai: true, minNear: 0.8 },
+  // 마디·박자로 계산: 예상 연주 시간만 알면 음을 듣지 않고도 마디·남은 시간이 맞아야 한다
+  // (합성 연주는 악보 빠르기의 90% 에 ±8% 흔들림)
+  { id: 'ode-to-joy', mode: 'beats', minMeasure: 0.85 },
+  { id: 'bach-prelude-c', mode: 'beats', minMeasure: 0.85 },
   // 사진 악보: 업로드 → 인식 서버 → 원본 사진 위에서 따라가기, 남은 시간
-  { id: 'ode-to-joy', photo: 'tests/omr/ode-to-joy-photo.jpg', minMeasure: 0.85 },
+  { id: 'ode-to-joy', mode: 'notes', photo: 'tests/omr/ode-to-joy-photo.jpg', minMeasure: 0.85 },
 ];
 
 let failed = false;
@@ -92,6 +97,8 @@ for (const c of CASES) {
     await page.fill('#importTitle', 'e2e 사진 악보');
     await page.click('#importStart');
     await page.waitForFunction(() => window.__readClassic.kind === 'image', null, { timeout: 180000 });
+  }
+  if (c.photo || c.mode === 'beats') {
     // 끝나기 10초 전에 알림
     await page.evaluate(() => {
       const i = document.getElementById('alertSec');
@@ -99,11 +106,19 @@ for (const c of CASES) {
       i.dispatchEvent(new Event('change'));
     });
   }
-  if (c.ai) {
-    await page.click('#settingsToggle');
-    await page.check('#ai');
-    await page.click('#settingsToggle');
+  await page.click('#settingsToggle');
+  await page.selectOption('#followMode', c.mode);
+  if (c.ai) await page.check('#ai');
+  if (c.mode === 'beats') {
+    // 예상 연주 시간 = 악보 빠르기대로의 길이 ÷ 0.9 (합성 연주 빠르기)
+    await page.waitForFunction(() => window.__readClassic.progress?.scoreTotalSec > 0, null, { timeout: 10000 });
+    const nominal = await page.evaluate(() => window.__readClassic.progress.scoreTotalSec);
+    const sec = Math.round(nominal / 0.9);
+    c.expected = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+    await page.fill('#expected', c.expected);
+    await page.dispatchEvent('#expected', 'change');
   }
+  await page.click('#settingsToggle');
   await page.waitForTimeout(500);
 
   await page.click('#micBtn');
@@ -145,8 +160,8 @@ for (const c of CASES) {
     const near = considered.length ? ok / considered.length : 0;
     if (near > best.near + 1e-9 || (Math.abs(near - best.near) < 1e-9 && Math.abs(d) < Math.abs(best.delay))) best = { near, delay: d };
   }
-  if (c.photo) {
-    // 사진 악보는 인식된 음 번호가 원본과 다를 수 있어 마디로 비교한다
+  if (c.photo || c.mode === 'beats') {
+    // 사진 악보는 인식된 음 번호가 원본과 다를 수 있어, 마디·박자 계산은 음 단위로 맞추지 않아 마디로 비교한다
     const measureAt = (t) => {
       let m = 0;
       for (const e of truth.timeline) if (e.time <= t) m = e.measure;
@@ -157,7 +172,8 @@ for (const c of CASES) {
     const ok = considered.filter((s) => s.measure !== null && Math.abs(s.measure - measureAt(s.t - d - 0.15)) <= 1);
     const measureNear = ok.length / considered.length;
     const lastMeasure = truth.timeline.at(-1).measure;
-    const endT = truth.timeline.at(-1).time + 1.2; // 마지막 음(2분음표)이 끝나는 때
+    // 마지막 음이 끝나는 때 (합성 소리는 마지막 음 뒤 1.6초 울림이 이어진다)
+    const endT = c.photo ? truth.timeline.at(-1).time + 1.2 : truth.duration - 1.6;
     const start = truth.timeline[0].time;
     const remErr = [0.5, 0.75].map((f) => {
       const t = d + start + f * (endT - start);
@@ -170,7 +186,7 @@ for (const c of CASES) {
     const pass = measureNear >= c.minMeasure && samples.at(-1).measure === lastMeasure && remErr.every((e) => e < 0.15) && sawEnding && finished && errors.length === 0;
     failed ||= !pass;
     console.log(
-      `${pass ? 'PASS' : 'FAIL'} 사진 악보 ${c.id}: 마디 ±1 ${(measureNear * 100).toFixed(1)}%, 마지막 마디 ${samples.at(-1).measure}/${lastMeasure}, ` +
+      `${pass ? 'PASS' : 'FAIL'} ${c.photo ? '사진 악보' : `마디·박자 계산 (예상 ${c.expected})`} ${c.id}: 마디 ±1 ${(measureNear * 100).toFixed(1)}%, 마지막 마디 ${samples.at(-1).measure}/${lastMeasure}, ` +
         `남은 시간 오차 ${remErr.map((e) => (e * 100).toFixed(0) + '%').join('/')} (곡 길이 대비, 50%/75% 지점), '곧 끝나요' ${sawEnding ? '표시됨' : '없음'}, 연주 끝 ${finished ? '인식' : '못 함'}` +
         (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
     );

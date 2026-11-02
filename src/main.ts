@@ -5,6 +5,7 @@ import { startMic, type MicHandle } from './audio/mic';
 import { formatDuration, ProgressEstimator, type ProgressOptions, type ProgressSnapshot } from './follow/progress';
 import { ScoreFollower, type RepeatJump } from './follow/tracker';
 import { KeyEngine } from './audio/keyEngine';
+import { BeatClock } from './follow/beatClock';
 import { KeyStream } from './audio/keyModel';
 import type { ScoreEvent } from './follow/types';
 import { layoutEvents } from './score/imageLayout';
@@ -69,6 +70,7 @@ const el = {
   showTicks: $<HTMLInputElement>('showTicks'),
   practice: $<HTMLInputElement>('practice'),
   ai: $<HTMLInputElement>('ai'),
+  followMode: $<HTMLSelectElement>('followMode'),
   autoScroll: $<HTMLInputElement>('autoScroll'),
   toast: $('toast'),
   getApp: $('getApp'),
@@ -121,6 +123,8 @@ interface GlobalPrefs {
   practice: boolean;
   /** AI 음 인식 (null: 노트북 앱이면 켜고 웹이면 끔) */
   ai: boolean | null;
+  /** 따라가는 방식: 마디·박자로 계산(기본) / 음을 듣고 따라가기 */
+  followMode: 'beats' | 'notes';
   /** 사진 악보 확대 비율 (MusicXML 악보와 따로) */
   imageZoom: number;
 }
@@ -135,6 +139,7 @@ const prefs: GlobalPrefs = lib.loadPrefs<GlobalPrefs>('global', {
   showTicks: false,
   practice: false,
   ai: null,
+  followMode: 'beats',
   imageZoom: 1,
 });
 const savePrefs = () => lib.savePrefs('global', prefs);
@@ -885,7 +890,10 @@ function createFollower(): void {
   if (!loaded) return;
   const sampleRate = mic?.sampleRate ?? 48000;
   fx = new FeatureExtractor(sampleRate);
-  keyStream = keyEngine && aiWanted() && mic ? new KeyStream(sampleRate, keyEngine.run) : null;
+  // 마디·박자 방식은 소리가 나는지만 본다 (음을 알아듣지 않는다)
+  clock = beatsMode() ? new BeatClock(loaded.events, progressOptions()) : null;
+  if (clock && position >= 0) clock.setPosition(position, performance.now() / 1000);
+  keyStream = keyEngine && aiWanted() && mic && !beatsMode() ? new KeyStream(sampleRate, keyEngine.run) : null;
   aiPending = [];
   aiUsed = 0;
   aiSkipped = 0;
@@ -912,10 +920,13 @@ function setPosition(index: number, fromUser: boolean): void {
     if (position < 0) {
       follower?.reset();
       progress?.reset();
+      clock?.reset();
       wasEnding = false;
     } else {
       follower?.setPosition(position);
       progress?.jumpTo(position);
+      // 마디·박자 방식: 짚은 곳으로 맞추고 그때까지 걸린 시간으로 속도도 다시 잡는다
+      clock?.setPosition(position, performance.now() / 1000);
     }
   }
   display.showEvent(position);
@@ -945,7 +956,7 @@ async function startListening(): Promise<void> {
   micStarting = true;
   el.micBtn.disabled = true;
   try {
-    await ensureKeyEngine();
+    if (!beatsMode()) await ensureKeyEngine();
     mic = await startMic(onSamples);
     gate.reset();
     const keepProgress = progress;
@@ -989,6 +1000,18 @@ function onSamples(block: Float32Array): void {
   const now = performance.now() / 1000;
   const frames = fx.push(block);
   if (frames.length) lastFrame = frames[frames.length - 1]; // 레벨·음 막대는 바로 보여 준다
+  if (clock) {
+    // 마디·박자 방식: 소리가 나는지만 보고 시계로 위치를 정한다
+    for (const f of frames) {
+      const voiced = gate.update(f.rms, f.flatness);
+      clock.update(now, voiced);
+      lastVoiced = voiced;
+      if (voiced) lastVoicedAt = performance.now();
+    }
+    const pos = clock.position();
+    if (pos !== position) setPosition(pos, false);
+    return;
+  }
   if (!keyStream) {
     for (const f of frames) processFrame(f, now);
     return;
@@ -1030,6 +1053,12 @@ function processFrame(f: AudioFrame, now: number): void {
     confidence = st.confidence;
   }
   if (st.index !== position) setPosition(st.index, false);
+}
+
+// ---------- 마디·박자로 계산 ----------
+let clock: BeatClock | null = null;
+function beatsMode(): boolean {
+  return prefs.followMode !== 'notes';
 }
 
 // ---------- AI 음 인식 ----------
@@ -1096,10 +1125,10 @@ function updateDock(): void {
   }
   const ev = position >= 0 ? loaded.events[position] : null;
   setText(el.measureNow, ev ? String(ev.measure) : '·');
-  setText(el.tempo, `♩ ${Math.round(follower?.tempo ?? currentBpm())}`);
+  setText(el.tempo, `♩ ${Math.round(clock ? clock.bpm : (follower?.tempo ?? currentBpm()))}`);
 
   // 진행률·남은 시간
-  snap = progress?.snapshot() ?? null;
+  snap = (clock ? clock.snapshot() : progress?.snapshot()) ?? null;
   const s = snap;
   const alertSec = Number(el.alertSec.value) || 0;
   const ending = !!s && s.started && !s.finished && (s.remainingSec <= alertSec || s.measuresLeft === 0);
@@ -1134,6 +1163,13 @@ function updateDock(): void {
     return;
   }
   const quiet = performance.now() - lastVoicedAt > 1200;
+  if (clock) {
+    if (ending) setStatus('곧 끝나요');
+    else if (!clock.started) setStatus('첫 소리를 기다려요 · 소리가 나면 마디·박자로 계산해요');
+    else if (clock.isPaused) setStatus('멈춤 · 소리가 다시 나면 이어서 계산해요');
+    else setStatus('마디·박자로 계산 중 · 어긋나면 악보에서 지금 마디를 누르세요');
+    return;
+  }
   if (ending) setStatus('곧 끝나요');
   else if (s?.check === 'lost') setStatus('위치를 놓쳤어요 · 흐른 시간으로 남은 시간을 계산하며 다시 찾는 중', true);
   else if (quiet) setStatus(position < 0 ? '첫 음을 기다리는 중 · 듣는 중' : '기다리는 중 · 소리가 나면 이어서 따라가요');
@@ -1149,7 +1185,16 @@ function renderTimeCheck(s: ProgressSnapshot | null): void {
   let text = '';
   let tone: '' | 'ok' | 'warn' = '';
   let title = '';
-  if (s && !s.finished) {
+  if (s && !s.finished && clock && s.started) {
+    // 마디·박자 방식: 무엇으로 계산하는지
+    if (s.basis === 'expected') text = '예상 연주 시간으로 계산';
+    else if (s.basis === 'score') text = `악보 빠르기로 계산 · ♩ ${Math.round(clock.bpm)}`;
+    else {
+      text = `빠르기를 몰라 ♩ ${Math.round(clock.bpm)} 로 어림 · 예상 시간을 넣거나 지금 마디를 눌러 맞추세요`;
+      tone = 'warn';
+    }
+    if (s.basis !== 'guess') tone = 'ok';
+  } else if (s && !s.finished) {
     if (!s.started) {
       const changes = new Set(loaded?.events.map((e) => e.bpm).filter(Boolean)).size > 1;
       if (s.basis === 'expected') text = `예상 연주 시간 기준 · 악보 빠르기대로면 ${formatDuration(s.scoreTotalSec, true)}`;
@@ -1387,6 +1432,23 @@ el.omrServer.addEventListener('change', () => {
   savePrefs();
   void refreshServerStatus(el.omrServerStatus);
 });
+el.followMode.value = prefs.followMode;
+el.followMode.addEventListener('change', () => {
+  prefs.followMode = el.followMode.value === 'notes' ? 'notes' : 'beats';
+  savePrefs();
+  syncFollowModeUi();
+  if (loaded && !mic) createFollower();
+  else if (loaded) toast('듣기를 멈췄다가 다시 시작하면 적용돼요.');
+  updateDock();
+});
+/** 마디·박자 방식에서는 음 인식 설정(AI 음 인식, 연습 모드)을 쓰지 않으므로 흐리게 */
+function syncFollowModeUi(): void {
+  for (const input of [el.ai, el.practice]) {
+    input.disabled = beatsMode();
+    input.closest('.settings-row')?.classList.toggle('dim', beatsMode());
+  }
+}
+syncFollowModeUi();
 el.ai.addEventListener('change', () => {
   prefs.ai = el.ai.checked;
   keyEngineFailed = false;
@@ -1411,6 +1473,7 @@ el.bpm.addEventListener('change', () => {
   follower?.setScoreTempo(bpm);
   scorePrefs.bpm = Math.round(bpm);
   progress?.setOptions(progressOptions());
+  clock?.setOptions(progressOptions());
   if (currentId) lib.savePrefs(currentId, scorePrefs);
   updateDock();
 });
@@ -1434,6 +1497,7 @@ el.expected.addEventListener('change', () => {
   scorePrefs.expectedSec = sec;
   el.expected.value = sec ? formatDuration(sec) : '';
   progress?.setOptions(progressOptions());
+  clock?.setOptions(progressOptions());
   if (currentId) lib.savePrefs(currentId, scorePrefs);
   updateDock();
 });

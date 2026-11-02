@@ -863,6 +863,24 @@ textarea {
 .settings-row input[type='number'] {
   width: 110px;
 }
+.settings-row select {
+  justify-self: start;
+  max-width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: var(--fw-regular);
+}
+.settings-row select:focus {
+  outline: none;
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--gold) 18%, transparent);
+}
+.settings-row.dim {
+  opacity: 0.5;
+}
 .field input:focus,
 .settings-row input:focus {
   outline: none;

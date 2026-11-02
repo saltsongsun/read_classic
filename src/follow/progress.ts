@@ -92,6 +92,29 @@ interface GoodPoint {
   pace: number;
 }
 
+/**
+ * 악보 시간표: 이벤트마다 악보 빠르기대로 칠 때 걸리는 시간(명목 시간, 초)과 그 누적.
+ * 빠르기 표시가 바뀌는 곳은 반영하고, 연습 템포(scoreBpm)를 바꾸면 전체를 같은 비율로 늘이거나 줄인다.
+ */
+export function nominalTimeline(
+  events: ScoreEvent[],
+  scoreBpm: number,
+): { nom: Float64Array<ArrayBuffer>; cum: Float64Array<ArrayBuffer>; total: number } {
+  const n = events.length;
+  const ref = events.find((e) => e.bpm)?.bpm ?? scoreBpm;
+  const scale = scoreBpm / ref;
+  const nom = new Float64Array(n);
+  const cum = new Float64Array(n + 1);
+  let bpm = ref;
+  for (let i = 0; i < n; i++) {
+    const e = events[i];
+    if (e.bpm) bpm = e.bpm;
+    nom[i] = (e.beats * 60) / (bpm * scale);
+    cum[i + 1] = cum[i] + nom[i];
+  }
+  return { nom, cum, total: cum[n] || 1 };
+}
+
 export class ProgressEstimator {
   private readonly events: ScoreEvent[];
   private readonly lastMeasure: number;
@@ -124,19 +147,10 @@ export class ProgressEstimator {
 
   /** 악보 빠르기표대로 이벤트마다 명목 시간을 매긴다. 연습 템포를 바꾸면 전체를 같은 비율로 늘이거나 줄인다. */
   private computeNominal(): void {
-    const n = this.events.length;
-    const ref = this.events.find((e) => e.bpm)?.bpm ?? this.opts.scoreBpm;
-    const scale = this.opts.scoreBpm / ref;
-    this.nom = new Float64Array(n);
-    this.cum = new Float64Array(n + 1);
-    let bpm = ref;
-    for (let i = 0; i < n; i++) {
-      const e = this.events[i];
-      if (e.bpm) bpm = e.bpm;
-      this.nom[i] = (e.beats * 60) / (bpm * scale);
-      this.cum[i + 1] = this.cum[i] + this.nom[i];
-    }
-    this.totalNominal = this.cum[n] || 1;
+    const t = nominalTimeline(this.events, this.opts.scoreBpm);
+    this.nom = t.nom;
+    this.cum = t.cum;
+    this.totalNominal = t.total;
   }
 
   setOptions(opts: Partial<ProgressOptions>): void {
