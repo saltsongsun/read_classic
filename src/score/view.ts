@@ -56,12 +56,14 @@ export class ScoreView {
       drawCredits: false,
       drawPartNames: false,
       drawMeasureNumbers: true,
+      // 악보의 제목·작곡가·빠르기 글자도 프리텐다드로 (음표 기호는 악보용 글꼴 그대로)
+      defaultFontFamily: 'Pretendard Variable, Pretendard, sans-serif',
       followCursor: false,
       cursorsOptions: [
         // 0: 지금 연주 중인 음
-        { type: 0, color: '#f2542d', alpha: 0.5, follow: false },
+        { type: 0, color: '#7e2328', alpha: 0.42, follow: false },
         // 1: 지금 마디
-        { type: 3, color: '#f5b700', alpha: 0.13, follow: false },
+        { type: 3, color: '#c9a86a', alpha: 0.2, follow: false },
       ],
     });
   }
@@ -79,6 +81,11 @@ export class ScoreView {
     this.osmd.clear();
     this.events = [];
     this.shownEvent = -2;
+    // 글꼴이 준비된 뒤에 그려야 글자 폭 계산이 맞는다
+    await Promise.all([
+      document.fonts.load('400 16px "Pretendard Variable"', '악보가나다ABC'),
+      document.fonts.load('700 16px "Pretendard Variable"', '악보가나다ABC'),
+    ]).catch(() => undefined);
     await this.osmd.load(content, fallbackTitle);
     this.osmd.Zoom = this.zoom;
     this.osmd.render();

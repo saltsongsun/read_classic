@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#1d1b19" />
+    <meta name="theme-color" content="#16140f" />
     <meta name="description" content="마이크로 연주를 들으며 악보에서 지금 연주 중인 위치를 따라가 표시합니다." />
     <title>Read Classic · 악보 따라가기</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231d1b19'/%3E%3Cpath d='M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z' fill='%23f2542d'/%3E%3C/svg%3E" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%2316140f'/%3E%3Cpath d='M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z' fill='%23c9a86a'/%3E%3C/svg%3E" />
   </head>
   <body>
     <div class="app" id="app">
@@ -15,7 +15,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
         </button>
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">♪</span>
+          <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z" /></svg></span>
           <span class="brand-name">Read Classic</span>
         </div>
         <div class="now-title" id="nowTitle">악보를 골라 주세요</div>
@@ -68,7 +68,7 @@
           <div class="paper" id="score" aria-label="악보"></div>
           <div class="image-score" id="imageScore" aria-label="악보" hidden></div>
           <div class="empty-state" id="emptyState">
-            <p class="empty-big">♪</p>
+            <svg class="empty-big" viewBox="0 0 64 64" aria-hidden="true"><path d="M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z" /></svg>
             <p>왼쪽 목록에서 악보를 고르거나 파일을 추가하세요.</p>
           </div>
           <div class="loading" id="loading" hidden>악보를 불러오는 중…</div>
@@ -76,6 +76,7 @@
       </main>
 
       <section class="settings" id="settings" hidden aria-label="설정">
+        <p class="settings-title">설정</p>
         <div class="settings-row">
           <label for="expected">예상 연주 시간</label>
           <input type="text" id="expected" inputmode="numeric" placeholder="예: 6:30" />
@@ -138,11 +139,11 @@
           </div>
         </div>
         <div class="dock-time">
-          <div class="remain"><span class="remain-label" id="remainLabel">남은 시간</span> <b id="remain">–</b></div>
+          <div class="remain"><span class="remain-label" id="remainLabel">남은 시간</span><b id="remain">–</b></div>
           <div class="elapsed" id="elapsed">경과 0:00</div>
         </div>
         <div class="dock-pos">
-          <div class="measure"><span class="measure-label">마디</span> <b id="measureNow">·</b><span class="measure-total" id="measureTotal"></span></div>
+          <div class="measure"><span class="measure-label">마디</span><span class="measure-num"><b id="measureNow">·</b><span class="measure-total" id="measureTotal"></span></span></div>
           <div class="tempo" id="tempo">♩ –</div>
         </div>
         <div class="dock-nav">
@@ -161,13 +162,14 @@
 
       <dialog class="import" id="importDialog" aria-labelledby="importHeading">
         <div class="import-inner">
+          <p class="import-eyebrow">새 악보</p>
           <h2 id="importHeading">사진·PDF 악보 만들기</h2>
           <label class="field">곡 제목 <input type="text" id="importTitle" placeholder="예: 쇼팽 녹턴 Op.9-2" /></label>
           <p class="import-hint">쪽 순서대로 넣어 주세요. 사진은 악보 한 쪽이 화면에 꽉 차게, 밝은 곳에서 똑바로 찍으면 가장 잘 읽혀요.</p>
           <ol class="thumbs" id="importPages"></ol>
           <div class="import-add">
-            <label class="btn"><input type="file" accept="image/*" capture="environment" id="importCamera" />📷 쪽 찍기</label>
-            <label class="btn"><input type="file" accept="image/*,.pdf,application/pdf" multiple id="importFiles" />사진·PDF 추가</label>
+            <label class="btn"><input type="file" accept="image/*" capture="environment" id="importCamera" /><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>쪽 찍기</label>
+            <label class="btn"><input type="file" accept="image/*,.pdf,application/pdf" multiple id="importFiles" /><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>사진·PDF 추가</label>
           </div>
           <p class="import-server" id="importServer">악보 인식 서버 확인 중…</p>
           <p class="import-progress" id="importProgress" role="status" aria-live="polite" hidden></p>

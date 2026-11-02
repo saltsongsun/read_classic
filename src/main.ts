@@ -1,3 +1,4 @@
+import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
 import './styles.css';
 import { FeatureExtractor, LevelGate, type AudioFrame } from './audio/features';
 import { startMic, type MicHandle } from './audio/mic';
@@ -970,7 +971,7 @@ el.quitApp.addEventListener('click', async () => {
     /* 이미 꺼짐 */
   }
   document.body.innerHTML =
-    '<main style="font:16px/1.6 system-ui,sans-serif;padding:48px 24px;text-align:center"><h1 style="font-size:22px">Read Classic 을 껐어요</h1><p>이 창은 닫아도 됩니다. 다시 쓰려면 아이콘을 누르세요.</p></main>';
+    '<main style="font:16px/1.6 var(--font);padding:48px 24px;text-align:center"><h1 style="font-size:22px;font-weight:800">Read Classic 을 껐어요</h1><p>이 창은 닫아도 됩니다. 다시 쓰려면 아이콘을 누르세요.</p></main>';
 });
 
 async function init(): Promise<void> {
