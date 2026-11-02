@@ -34,6 +34,15 @@
 
       <aside class="library" id="library" aria-label="악보 목록">
         <div class="library-inner">
+          <div class="get-app update-card" id="updateCard" hidden>
+            <p class="get-app-title">새 버전이 나왔어요 <span class="update-ver" id="updateVer"></span></p>
+            <p class="get-app-text" id="updateText">고친 점과 새 기능이 들어 있어요. 저장한 악보는 그대로 남아요.</p>
+            <div class="update-progress" id="updateProgress" hidden><i id="updateBar"></i></div>
+            <div class="get-app-links">
+              <button type="button" class="btn primary" id="updateNow">지금 업데이트</button>
+            </div>
+            <a class="get-app-more" id="updatePage" href="#" target="_blank" rel="noopener">바뀐 점 보기</a>
+          </div>
           <label class="drop" id="drop">
             <input type="file" id="fileInput" accept=".musicxml,.xml,.mxl,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml,image/*,.pdf,application/pdf" multiple />
             <span class="drop-title">악보 파일 추가</span>
@@ -117,6 +126,11 @@
           <input type="checkbox" id="autoScroll" checked />
           <span class="settings-val">연주 위치를 화면 위쪽에 유지</span>
         </div>
+        <div class="settings-row" id="versionRow" hidden>
+          <label>앱 버전</label>
+          <button type="button" class="btn" id="checkUpdate">업데이트 확인</button>
+          <span class="settings-val" id="versionVal"></span>
+        </div>
         <div class="settings-row" id="quitRow" hidden>
           <label>노트북 앱</label>
           <button type="button" class="btn" id="quitApp">앱 끄기</button>
@@ -160,6 +174,15 @@
         </div>
       </footer>
       <div class="toast" id="toast" role="alert" hidden></div>
+      <div class="updating" id="updating" hidden role="alertdialog" aria-labelledby="updatingTitle">
+        <div class="updating-card">
+          <svg class="updating-mark" viewBox="0 0 64 64" aria-hidden="true"><path d="M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z" /></svg>
+          <h2 id="updatingTitle">업데이트하는 중</h2>
+          <p id="updatingText">새 버전을 내려받고 있어요…</p>
+          <div class="update-progress"><i id="updatingBar"></i></div>
+          <p class="updating-note">1~2분 걸려요. 끝나면 이 화면이 저절로 새 버전으로 바뀌어요. 저장한 악보는 그대로예요.</p>
+        </div>
+      </div>
 
       <dialog class="import" id="importDialog" aria-labelledby="importHeading">
         <div class="import-inner">

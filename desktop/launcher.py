@@ -8,11 +8,15 @@ Read Classic 노트북용 실행 프로그램.
   read-classic            서버 실행 + 브라우저 열기 (이미 켜져 있으면 브라우저만 연다)
   read-classic --homr …   (내부용) 악보 인식 엔진 homr 를 실행한다. 서버가 쪽마다 이 모드로 자신을 부른다.
   read-classic --diag     (시험용) 글자 인코딩 설정 등을 JSON 으로 보여 준다.
+  read-classic --after-update   업데이트 설치가 끝난 뒤 설치 프로그램이 부른다.
+                          열려 있던 앱 화면이 다시 연결되면 브라우저 탭을 새로 열지 않는다.
+  환경 변수 READ_CLASSIC_NO_BROWSER=1 이면 브라우저를 열지 않는다 (시험용).
   read-classic --no-browser --port N   (시험용)
 """
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import socket
@@ -193,10 +197,30 @@ def port_free(port: int) -> bool:
             return False
 
 
-def wait_and_open(url: str, port: int, open_browser: bool) -> None:
+def load_version() -> None:
+    """묶을 때 넣어 둔 판 정보 (version.json) → 서버가 업데이트를 확인할 때 쓴다."""
+    try:
+        info = json.loads((resource_dir() / "version.json").read_text(encoding="utf-8"))
+        os.environ.setdefault("READ_CLASSIC_BUILD", str(int(info.get("build", 0))))
+        os.environ.setdefault("READ_CLASSIC_VERSION", str(info.get("version", "dev")))
+    except Exception:
+        pass
+
+
+def wait_and_open(url: str, port: int, open_browser: bool, after_update: bool = False) -> None:
     for _ in range(480):
         if is_read_classic(port):
             print(f"준비됐어요 → {url}", flush=True)
+            if open_browser and after_update:
+                # 업데이트 전부터 열려 있던 앱 화면이 다시 연결되면 새 탭을 열지 않는다
+                from server import app as server_app
+
+                ready = time.monotonic()
+                while time.monotonic() - ready < 8:
+                    if server_app.LAST_TAB_PING > ready - 1:
+                        print("열려 있던 앱 화면이 다시 연결됐어요", flush=True)
+                        return
+                    time.sleep(0.25)
             if open_browser:
                 webbrowser.open(url)
             return
@@ -206,7 +230,8 @@ def wait_and_open(url: str, port: int, open_browser: bool) -> None:
 
 
 def serve(args: list[str]) -> None:
-    open_browser = "--no-browser" not in args
+    open_browser = "--no-browser" not in args and not os.environ.get("READ_CLASSIC_NO_BROWSER")
+    after_update = "--after-update" in args
     port = DEFAULT_PORT
     if "--port" in args:
         port = int(args[args.index("--port") + 1])
@@ -225,6 +250,7 @@ def serve(args: list[str]) -> None:
                 port = p
                 break
 
+    load_version()
     os.environ.setdefault("STATIC_DIR", str(resource_dir() / "web"))
     os.environ["READ_CLASSIC_DESKTOP"] = "1"  # 앱 안의 "앱 끄기" 버튼을 켠다
     from server import app as server_app
@@ -236,7 +262,7 @@ def serve(args: list[str]) -> None:
         server_app.HOMR_CMD = [sys.executable, str(Path(__file__).resolve()), "--homr"]
 
     url = f"http://localhost:{port}"
-    threading.Thread(target=wait_and_open, args=(url, port, open_browser), daemon=True).start()
+    threading.Thread(target=wait_and_open, args=(url, port, open_browser, after_update), daemon=True).start()
 
     import uvicorn
 

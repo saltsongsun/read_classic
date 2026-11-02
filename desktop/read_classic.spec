@@ -14,6 +14,8 @@ ICON = os.path.join(SPECPATH, 'icons', 'read-classic.ico' if IS_WIN else 'read-c
 SKIP_ENGINES = ('openvino', 'paddle', 'pytorch', 'tensorrt', 'mnn')
 
 datas = [(os.path.join(ROOT, 'dist'), 'web')]
+if os.path.exists(os.path.join(SPECPATH, 'build', 'version.json')):
+    datas.append((os.path.join(SPECPATH, 'build', 'version.json'), '.'))  # 판 정보 (업데이트 확인용)
 datas += collect_data_files('homr')  # 악보 인식 모델 (*.onnx)
 datas += collect_data_files('rapidocr')  # 제목 글자 인식 모델과 설정
 datas += collect_data_files('musicxml')  # MusicXML 스키마 (악보 생성에 필요)

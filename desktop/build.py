@@ -11,11 +11,13 @@
   Mac      ReadClassic-Mac.dmg             열어서 Read Classic 을 응용 프로그램 폴더로 끌어다 놓기
   Linux    ReadClassic-Linux.zip           풀고 ./read-classic
 
-실행할 때는 인터넷이 필요 없다. 판 번호는 환경 변수 READ_CLASSIC_VERSION (기본 1.0.0).
+실행할 때는 인터넷이 필요 없다. 판 번호는 환경 변수 READ_CLASSIC_VERSION (기본 1.0.0),
+업데이트 비교용 빌드 번호는 READ_CLASSIC_BUILD (기본 0 = 업데이트 확인 안 함).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -30,6 +32,7 @@ OUT = HERE / "out"
 WORK = HERE / "build"
 SYSTEM = platform.system()
 VERSION = os.environ.get("READ_CLASSIC_VERSION", "1.0.0")
+BUILD = int(os.environ.get("READ_CLASSIC_BUILD", "0") or 0)  # 0 = 직접 만든 판 (업데이트 확인 안 함)
 
 MAC_GUIDE = """Read Classic 설치
 
@@ -61,6 +64,9 @@ def check_inputs() -> None:
 
 
 def pyinstaller() -> None:
+    # 앱이 자기 판을 알 수 있게 (업데이트 확인용)
+    WORK.mkdir(parents=True, exist_ok=True)
+    (WORK / "version.json").write_text(json.dumps({"build": BUILD, "version": VERSION}), encoding="utf-8")
     subprocess.run(
         [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--distpath", str(WORK / "dist"),
          "--workpath", str(WORK / "tmp"), str(HERE / "read_classic.spec")],

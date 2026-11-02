@@ -52,6 +52,14 @@ Name: "{autodesktop}\Read Classic"; Filename: "{app}\read-classic.exe"; Tasks: d
 
 [Run]
 Filename: "{app}\read-classic.exe"; Description: "지금 Read Classic 열기"; Flags: nowait postinstall skipifsilent
+; 앱 안의 "업데이트" 로 설치했을 때 (/RELAUNCH=1): 끝나면 새 판을 다시 켠다
+Filename: "{app}\read-classic.exe"; Parameters: "--after-update"; Flags: nowait; Check: ShouldRelaunch
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /T /IM read-classic.exe"; Flags: runhidden; RunOnceId: "StopReadClassic"
+
+[Code]
+function ShouldRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;

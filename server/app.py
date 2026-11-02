@@ -33,6 +33,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from server.update import current as app_version
+from server.update import updater
+
 HOMR_CMD = shlex.split(os.environ.get("HOMR_CMD", "homr"))
 OMR_TIMEOUT = float(os.environ.get("OMR_TIMEOUT", "600"))
 MAX_UPLOAD = int(float(os.environ.get("MAX_UPLOAD_MB", "25")) * 1024 * 1024)
@@ -111,18 +114,57 @@ def failure_message(output: str) -> str:
 DESKTOP = os.environ.get("READ_CLASSIC_DESKTOP") == "1"  # 노트북용 앱으로 실행 중인지
 
 
+LAST_TAB_PING = 0.0  # 앱 화면(브라우저 탭)이 마지막으로 연결을 확인한 때 (업데이트 뒤 탭을 새로 열지 정할 때 쓴다)
+_active = 0  # 지금 인식 중인 쪽 수
+
+
 @app.get("/api/health")
-async def health() -> dict:
-    return {"ok": True, "engine": "homr", "version": _engine_version(), "desktop": DESKTOP}
+async def health(tab: int = 0) -> dict:
+    global LAST_TAB_PING
+    if tab:
+        LAST_TAB_PING = time.monotonic()
+    return {
+        "ok": True,
+        "engine": "homr",
+        "version": _engine_version(),
+        "desktop": DESKTOP,
+        "app": app_version(),
+        "pid": os.getpid(),
+    }
+
+
+def _local_desktop_only(request: Request) -> None:
+    """노트북용 앱에서, 이 컴퓨터 안에서 온 요청만 받는다."""
+    if not DESKTOP or (request.client and request.client.host not in ("127.0.0.1", "::1", "localhost")):
+        raise HTTPException(404, "Not Found")
 
 
 @app.post("/api/shutdown")
 async def shutdown(request: Request) -> dict:
-    """노트북용 앱의 "앱 끄기" 버튼. 이 컴퓨터 안에서 온 요청만 받는다."""
-    if not DESKTOP or (request.client and request.client.host not in ("127.0.0.1", "::1", "localhost")):
-        raise HTTPException(404, "Not Found")
+    """노트북용 앱의 "앱 끄기" 버튼."""
+    _local_desktop_only(request)
     threading.Timer(0.5, lambda: os._exit(0)).start()
     return {"ok": True}
+
+
+@app.get("/api/update")
+async def update_status(request: Request, force: int = 0) -> dict:
+    """새 판이 있는지 (인터넷이 없으면 offline)."""
+    _local_desktop_only(request)
+    await asyncio.to_thread(updater.check, bool(force))
+    return updater.status()
+
+
+@app.post("/api/update/install")
+async def update_install(request: Request) -> dict:
+    """새 판을 내려받아 설치한다. 설치가 시작되면 이 앱은 꺼지고, 끝나면 새 판이 다시 켜진다."""
+    _local_desktop_only(request)
+    if _active:
+        raise HTTPException(409, "악보를 인식하는 중이에요. 끝난 뒤에 업데이트해 주세요.")
+    try:
+        return updater.start(lambda: os._exit(0))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from None
 
 
 @app.post("/api/omr")
@@ -141,7 +183,9 @@ async def omr(image: UploadFile) -> JSONResponse:
         src = Path(tmp) / f"page{suffix}"
         src.write_bytes(data)
         started = time.monotonic()
+        global _active
         async with _slots:
+            _active += 1
             # 일반 스레드에서 실행: 운영체제/이벤트 루프 종류와 상관없이 동작 (Windows 포함)
             env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
             try:
@@ -156,6 +200,8 @@ async def omr(image: UploadFile) -> JSONResponse:
                 )
             except subprocess.TimeoutExpired:
                 raise HTTPException(504, "악보 인식 시간이 너무 오래 걸려 중단했습니다.") from None
+            finally:
+                _active -= 1
         out = proc.stdout
         result = src.with_suffix(".musicxml")
         if proc.returncode != 0 or not result.exists():

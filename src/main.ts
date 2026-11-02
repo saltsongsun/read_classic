@@ -71,6 +71,19 @@ const el = {
   getAppMac: $<HTMLAnchorElement>('getAppMac'),
   getAppPage: $<HTMLAnchorElement>('getAppPage'),
   quitRow: $('quitRow'),
+  versionRow: $('versionRow'),
+  versionVal: $('versionVal'),
+  checkUpdate: $<HTMLButtonElement>('checkUpdate'),
+  updateCard: $('updateCard'),
+  updateVer: $('updateVer'),
+  updateText: $('updateText'),
+  updateProgress: $('updateProgress'),
+  updateBar: $('updateBar'),
+  updateNow: $<HTMLButtonElement>('updateNow'),
+  updatePage: $<HTMLAnchorElement>('updatePage'),
+  updating: $('updating'),
+  updatingText: $('updatingText'),
+  updatingBar: $('updatingBar'),
   quitApp: $<HTMLButtonElement>('quitApp'),
   importDialog: $<HTMLDialogElement>('importDialog'),
   importTitle: $<HTMLInputElement>('importTitle'),
@@ -1036,6 +1049,135 @@ async function setupAppMode(): Promise<void> {
   const st = await checkServer(prefs.omrServer);
   el.quitRow.hidden = !st.desktop;
   el.getApp.hidden = st.ok;
+  if (st.desktop) {
+    el.versionRow.hidden = false;
+    void refreshUpdate(false);
+    // 오래 켜 두는 경우를 위해 가끔 다시 확인 (서버가 30분마다만 실제로 묻는다)
+    setInterval(() => void refreshUpdate(false), 60 * 60 * 1000);
+  }
+}
+
+// ---------- 노트북 앱 업데이트 ----------
+interface UpdateStatus {
+  current: { build: number; version: string };
+  latest: { build: number; version: string; tag?: string; page?: string } | null;
+  available: boolean;
+  offline: boolean;
+  state: 'idle' | 'downloading' | 'installing' | 'manual' | 'error';
+  progress: number;
+  message: string;
+}
+
+async function getUpdate(force: boolean): Promise<UpdateStatus | null> {
+  try {
+    const res = await fetch(`/api/update${force ? '?force=1' : ''}`, { cache: 'no-store' });
+    return res.ok ? ((await res.json()) as UpdateStatus) : null;
+  } catch {
+    return null;
+  }
+}
+
+function showUpdate(u: UpdateStatus): void {
+  const dev = u.current.build === 0;
+  setText(el.versionVal, dev ? '직접 만든 판 (업데이트 확인 안 함)' : `${u.current.version}${u.available ? ' · 새 버전이 있어요' : ''}`);
+  el.updateCard.hidden = !u.available && u.state !== 'manual' && u.state !== 'error';
+  if (u.latest) setText(el.updateVer, u.latest.version);
+  if (u.latest?.page) el.updatePage.href = u.latest.page;
+  if (u.state === 'manual' || u.state === 'error') setText(el.updateText, u.message);
+}
+
+async function refreshUpdate(force: boolean): Promise<void> {
+  const u = await getUpdate(force);
+  if (!u) return;
+  showUpdate(u);
+  if (force) {
+    if (u.current.build === 0) toast('직접 만든 판이라 업데이트를 확인하지 않아요.');
+    else if (u.available) toast(`새 버전 ${u.latest?.version} 이 나왔어요. 왼쪽 목록 위의 [지금 업데이트] 를 누르세요.`);
+    else if (u.offline) toast('인터넷에 연결되어 있지 않아 확인하지 못했어요.');
+    else toast(`최신 버전이에요 (${u.current.version}).`);
+  }
+}
+
+el.checkUpdate.addEventListener('click', () => void refreshUpdate(true));
+
+el.updateNow.addEventListener('click', async () => {
+  const listening = !!mic;
+  const ask = listening
+    ? '지금 듣는 중이에요. 듣기를 멈추고 업데이트할까요? (1~2분 동안 앱이 꺼졌다가 새 버전으로 다시 켜져요)'
+    : '업데이트할까요? 1~2분 동안 앱이 꺼졌다가 새 버전으로 다시 켜져요. 저장한 악보는 그대로예요.';
+  if (!confirm(ask)) return;
+  stopListening();
+  el.updateNow.disabled = true;
+  let res: Response;
+  try {
+    res = await fetch('/api/update/install', { method: 'POST' });
+  } catch {
+    el.updateNow.disabled = false;
+    toast('업데이트를 시작하지 못했어요.');
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    el.updateNow.disabled = false;
+    toast((body as { detail?: string }).detail ?? '업데이트를 시작하지 못했어요.');
+    return;
+  }
+  const u = body as UpdateStatus;
+  if (u.state === 'manual') {
+    el.updateNow.disabled = false;
+    showUpdate(u);
+    return;
+  }
+  await followUpdate(u);
+});
+
+/** 내려받기·설치를 지켜보다가 새 버전이 켜지면 화면을 새로 고친다. */
+async function followUpdate(first: UpdateStatus): Promise<void> {
+  const oldPid = await fetch('/api/health', { cache: 'no-store' })
+    .then((r) => r.json())
+    .then((j) => j.pid as number)
+    .catch(() => -1);
+  el.updating.hidden = false;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  let u: UpdateStatus | null = first;
+  // 1) 내려받기
+  while (u && (u.state === 'downloading' || u.state === 'installing')) {
+    if (u.state === 'downloading') {
+      setText(el.updatingText, `새 버전을 내려받고 있어요… ${Math.round(u.progress * 100)}%`);
+      el.updatingBar.style.width = `${Math.round(u.progress * 100)}%`;
+    } else {
+      setText(el.updatingText, '설치하고 있어요… 잠시 뒤 저절로 다시 열려요');
+      el.updatingBar.style.width = '100%';
+    }
+    await sleep(500);
+    u = await getUpdate(false);
+  }
+  if (u && u.state === 'error') {
+    el.updating.hidden = true;
+    el.updateNow.disabled = false;
+    showUpdate(u);
+    toast(u.message);
+    return;
+  }
+  // 2) 앱이 꺼졌다가 새 버전으로 켜질 때까지 기다린다 (tab=1: 열려 있던 화면이 다시 연결됐다고 알림)
+  setText(el.updatingText, '설치하고 있어요… 잠시 뒤 저절로 다시 열려요');
+  el.updatingBar.parentElement?.classList.add('busy');
+  const started = performance.now();
+  for (;;) {
+    await sleep(1500);
+    try {
+      const j = await (await fetch('/api/health?tab=1', { cache: 'no-store' })).json();
+      if (j.pid !== oldPid) {
+        location.reload();
+        return;
+      }
+    } catch {
+      /* 아직 꺼져 있음 */
+    }
+    if (performance.now() - started > 4 * 60 * 1000) {
+      setText(el.updatingText, '다시 켜지지 않으면 바탕화면(또는 응용 프로그램)의 Read Classic 아이콘을 눌러 주세요.');
+    }
+  }
 }
 el.quitApp.addEventListener('click', async () => {
   if (!confirm('Read Classic 을 끌까요? 다시 쓰려면 바탕화면(또는 응용 프로그램)의 아이콘을 누르세요.')) return;

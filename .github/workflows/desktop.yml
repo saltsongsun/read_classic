@@ -39,7 +39,8 @@ jobs:
     env:
       PYTHONUTF8: '1' # Windows 에서 한글 출력
       PYTHONIOENCODING: utf-8
-      READ_CLASSIC_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '1.0.0' }}
+      READ_CLASSIC_VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('1.0.{0}', github.run_number) }}
+      READ_CLASSIC_BUILD: ${{ github.run_number }} # 앱이 새 판을 알아보는 번호 (릴리스의 latest.json 과 비교)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -80,6 +81,10 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: python desktop/smoke_test.py (Join-Path $env:LOCALAPPDATA 'Programs\ReadClassic\read-classic.exe') --unicode-paths
+      - name: 'Windows: 앱 안의 업데이트 (내려받기 → 조용히 설치 → 다시 켜짐)'
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python desktop/update_test.py (Join-Path $env:LOCALAPPDATA 'Programs\ReadClassic\read-classic.exe') desktop\out\ReadClassic-Windows-Setup.exe
       - name: 'Mac: dmg 안의 앱 확인 후 실행해 보기'
         if: runner.os == 'macOS'
         run: |
@@ -88,12 +93,18 @@ jobs:
           test -x "/tmp/rc/Read Classic.app/Contents/MacOS/read-classic"
           test -L /tmp/rc/Applications
           python desktop/smoke_test.py "/tmp/rc/Read Classic.app/Contents/MacOS/read-classic"
+          mkdir -p "$RUNNER_TEMP/apps"
+          ditto "/tmp/rc/Read Classic.app" "$RUNNER_TEMP/apps/Read Classic.app"
           hdiutil detach /tmp/rc
+      - name: 'Mac: 앱 안의 업데이트 (내려받기 → 앱 바꾸기 → 다시 켜짐)'
+        if: runner.os == 'macOS'
+        run: python desktop/update_test.py "$RUNNER_TEMP/apps/Read Classic.app/Contents/MacOS/read-classic" desktop/out/ReadClassic-Mac.dmg
       - name: 'Linux: 실행해 보기'
         if: runner.os == 'Linux'
         run: |
           python desktop/smoke_test.py
           python desktop/smoke_test.py --unicode-paths
+          python desktop/update_test.py desktop/build/dist/ReadClassic/read-classic desktop/out/ReadClassic-Linux.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -116,9 +127,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('laptop-{0}', github.run_number) }}
+          VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('1.0.{0}', github.run_number) }}
         run: |
           ls -la out
-          gh release create "$TAG" out/ReadClassic-Windows-Setup.exe out/ReadClassic-Mac.dmg out/ReadClassic-Linux.zip \
+          # 앱 안의 "업데이트" 가 읽는 판 정보
+          base="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          cat > out/latest.json <<EOF
+          {"build": ${{ github.run_number }}, "version": "${VERSION#v}", "tag": "$TAG",
+           "page": "https://github.com/${{ github.repository }}/releases/tag/$TAG",
+           "files": {"windows": "$base/ReadClassic-Windows-Setup.exe", "mac": "$base/ReadClassic-Mac.dmg", "linux": "$base/ReadClassic-Linux.zip"}}
+          EOF
+          python3 -m json.tool out/latest.json
+          gh release create "$TAG" out/ReadClassic-Windows-Setup.exe out/ReadClassic-Mac.dmg out/ReadClassic-Linux.zip out/latest.json \
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --title "Read Classic 노트북용 $TAG" \
