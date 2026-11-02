@@ -177,6 +177,48 @@ for (const c of CASES) {
   await browser.close();
 }
 
+// 여러 쪽 중 한 쪽을 읽지 못해도 나머지 쪽으로 악보를 만든다
+if (omrReady) {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base);
+  await page.waitForFunction(() => window.__readClassic?.events.length > 0, null, { timeout: 30000 });
+  // 아무것도 없는 흰 쪽 (표지처럼 악보가 없는 쪽)
+  const blankB64 = await page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 200;
+    c.height = 280;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, c.width, c.height);
+    return c.toDataURL('image/png').split(',')[1];
+  });
+  const blank = Buffer.from(blankB64, 'base64');
+  await page.setInputFiles('#fileInput', [
+    { name: 'page1.jpg', mimeType: 'image/jpeg', buffer: readFileSync(join(root, 'tests/omr/ode-to-joy-photo.jpg')) },
+    { name: 'blank.png', mimeType: 'image/png', buffer: blank },
+  ]);
+  await page.waitForFunction(() => document.querySelectorAll('#importPages li').length === 2, null, { timeout: 20000 });
+  await page.click('#importStart');
+  let toastText = '';
+  try {
+    await page.waitForFunction(() => /건너뛰었어요/.test(document.getElementById('toast').textContent ?? ''), null, { timeout: 120000 });
+    toastText = await page.textContent('#toast');
+  } catch {
+    toastText = (await page.textContent('#importProgress')) ?? '';
+  }
+  const st = await page.evaluate(() => ({ kind: window.__readClassic.kind, events: window.__readClassic.events.length }));
+  const pass = st.kind === 'image' && st.events > 50 && /2쪽은 읽지 못해/.test(toastText) && errors.length === 0;
+  failed ||= !pass;
+  console.log(
+    `${pass ? 'PASS' : 'FAIL'} 한 쪽 인식 실패: 악보 ${st.kind}, 음 ${st.events}개, 알림 "${toastText.trim()}"` +
+      (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
+  );
+  await browser.close();
+}
+
 await server.close();
 omrProc?.kill();
 process.exit(failed ? 1 : 0);

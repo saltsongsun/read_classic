@@ -9,7 +9,7 @@ import { layoutEvents } from './score/imageLayout';
 import { ImageScoreView, type PageImage } from './score/imageView';
 import { checkServer, imageToPage, isImageOrPdf, isPdf, LAPTOP_APP, pdfToPages, recognizePage, type OmrPage } from './score/importImages';
 import * as lib from './score/library';
-import { combinePages, eventsFromSteps, parseMusicXML, toSteps } from './score/musicxml';
+import { combinePages, emptyPage, eventsFromSteps, parseMusicXML, toSteps } from './score/musicxml';
 import { ScoreView } from './score/view';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -371,25 +371,47 @@ async function startImport(): Promise<void> {
   if (!(await refreshServerStatus(el.importServer))) return;
   el.importStart.disabled = true;
   importAbort = new AbortController();
+  const total = importList.length;
   const results: OmrPage[] = [];
+  const failed: Array<{ page: number; reason: string }> = [];
+  const started = performance.now();
   try {
-    for (let i = 0; i < importList.length; i++) {
-      showImportProgress(`${i + 1}/${importList.length}쪽 인식 중… (한 쪽에 10~40초 걸려요)`);
-      results.push(await recognizePage(prefs.omrServer, importList[i], importAbort.signal));
+    for (let i = 0; i < total; i++) {
+      showImportProgress(`${i + 1}/${total}쪽 인식 중… ${importEta(started, i, total)}`);
+      try {
+        results.push(await recognizePage(prefs.omrServer, importList[i], importAbort.signal));
+      } catch (e) {
+        const err = e as Error;
+        // 취소했거나 인식 프로그램과 연결이 끊기면 멈추고, 한 쪽만 못 읽은 것이면 다음 쪽으로 넘어간다
+        if (err.name === 'AbortError') throw err;
+        if (err instanceof TypeError) throw new Error('악보 인식 프로그램과 연결이 끊겼어요. 앱을 다시 켜고 해 보세요.');
+        failed.push({ page: i + 1, reason: err.message });
+        results.push({ musicxml: '', staffs: [] });
+      }
     }
     const notes = results.reduce((a, r) => a + (r.musicxml.match(/<pitch>/g)?.length ?? 0), 0);
-    if (notes === 0) throw new Error('음표를 하나도 찾지 못했어요. 더 밝고 반듯하게 찍어 보세요.');
+    if (notes === 0) {
+      throw new Error(failed.length ? failed[0].reason : '음표를 하나도 찾지 못했어요. 더 밝고 반듯하게 찍어 보세요.');
+    }
     const stored = await lib.addImageScore(title, importList, results);
     el.importDialog.close();
     await renderLibrary();
     await openScore(stored.id);
-    toast(`'${title}' 악보를 저장했어요 (음표 ${notes}개 인식).`);
+    const skipped = failed.length ? ` ${failed.map((f) => f.page).join(', ')}쪽은 읽지 못해 건너뛰었어요.` : '';
+    toast(`'${title}' 악보를 저장했어요 (음표 ${notes}개 인식).${skipped}`);
   } catch (e) {
     if ((e as Error).name !== 'AbortError') showImportProgress(`인식하지 못했어요: ${(e as Error).message}`);
   } finally {
     el.importStart.disabled = false;
     importAbort = null;
   }
+}
+
+/** 지금까지 걸린 시간으로 남은 인식 시간을 어림한다. */
+function importEta(started: number, done: number, total: number): string {
+  if (done === 0) return '(한 쪽에 10~40초 걸려요)';
+  const left = ((performance.now() - started) / done) * (total - done) / 1000;
+  return left < 60 ? '(곧 끝나요)' : `(남은 시간 약 ${Math.round(left / 60)}분)`;
 }
 
 // ---------- 악보 열기 ----------
@@ -462,7 +484,8 @@ async function showXml(content: string | Blob, title: string): Promise<LoadedSco
 async function showImages(stored: lib.StoredScore): Promise<LoadedScore> {
   const omr = stored.omr ?? [];
   const parser = new DOMParser();
-  const score = combinePages(omr.map((p, i) => parseMusicXML(p.musicxml, parser, i)));
+  // 인식하지 못한 쪽은 비워 둔다 (그 쪽은 건너뛰고 따라간다)
+  const score = combinePages(omr.map((p, i) => (p.musicxml ? parseMusicXML(p.musicxml, parser, i) : emptyPage())));
   const steps = toSteps(score);
   const events = eventsFromSteps(steps, score.totalBeats);
   if (events.length === 0) throw new Error('인식된 음표가 없어요.');

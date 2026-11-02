@@ -230,6 +230,11 @@ function fitVoices(
 }
 
 /** 페이지별 인식 결과를 이어 붙인다 (박 위치와 마디 번호를 이어서 센다). */
+/** 인식하지 못한 쪽 자리에 넣는 빈 쪽. */
+export function emptyPage(): ParsedScore {
+  return { notes: [], measures: [], totalBeats: 0 };
+}
+
 export function combinePages(pages: ParsedScore[]): ParsedScore {
   const notes: ParsedNote[] = [];
   const measures: ParsedMeasure[] = [];

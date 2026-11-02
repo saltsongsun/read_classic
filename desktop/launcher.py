@@ -7,6 +7,7 @@ Read Classic 노트북용 실행 프로그램.
 
   read-classic            서버 실행 + 브라우저 열기 (이미 켜져 있으면 브라우저만 연다)
   read-classic --homr …   (내부용) 악보 인식 엔진 homr 를 실행한다. 서버가 쪽마다 이 모드로 자신을 부른다.
+  read-classic --diag     (시험용) 글자 인코딩 설정 등을 JSON 으로 보여 준다.
   read-classic --no-browser --port N   (시험용)
 """
 
@@ -85,11 +86,91 @@ def show_error(message: str) -> None:
         pass
 
 
+def force_utf8_text_files() -> None:
+    """글자 파일을 UTF-8 로 읽고 쓰게 한다.
+
+    한국어 Windows 는 기본 글자 인코딩이 cp949 라서, 인코딩을 따로 적지 않고 파일을 여는
+    라이브러리(musicxml 이 악보 규격 파일을 읽을 때 등)가 UTF-8 파일을 못 읽고 멈춘다.
+    묶음 프로그램은 처음부터 UTF-8 모드로 돌게 해 두었고(read_classic.spec), 이건 혹시 그게
+    꺼져 있을 때를 위한 안전장치다.
+    """
+    if sys.flags.utf8_mode:
+        return
+    import builtins
+    import io
+
+    real_open = io.open
+
+    def open_utf8(file, mode="r", buffering=-1, encoding=None, *args, **kwargs):  # type: ignore[no-untyped-def]
+        if "b" not in mode and encoding in (None, "locale"):
+            encoding = "utf-8"
+        return real_open(file, mode, buffering, encoding, *args, **kwargs)
+
+    builtins.open = open_utf8
+    io.open = open_utf8  # pathlib 의 Path.open / read_text 도 이걸 쓴다
+
+
+def allow_unicode_image_paths() -> None:
+    """Windows 의 OpenCV 는 한글 등이 들어간 경로(예: 사용자 이름이 한글)의 그림을 읽고 쓰지 못한다.
+    그런 경로는 파일을 바이트로 읽어 메모리에서 풀고, 쓸 때도 메모리에서 만든 뒤 저장한다."""
+    if SYSTEM != "Windows":
+        return
+    import cv2
+    import numpy as np
+
+    real_imread, real_imwrite = cv2.imread, cv2.imwrite
+
+    def imread(filename, flags=cv2.IMREAD_COLOR):  # type: ignore[no-untyped-def]
+        name = os.fspath(filename)
+        if name.isascii():
+            return real_imread(name, flags)
+        try:
+            data = np.fromfile(name, dtype=np.uint8)
+        except OSError:
+            return None
+        return cv2.imdecode(data, flags) if data.size else None
+
+    def imwrite(filename, img, params=None):  # type: ignore[no-untyped-def]
+        name = os.fspath(filename)
+        if name.isascii():
+            return real_imwrite(name, img, params) if params is not None else real_imwrite(name, img)
+        ok, buf = cv2.imencode(os.path.splitext(name)[1] or ".png", img, params if params is not None else [])
+        if ok:
+            buf.tofile(name)
+        return ok
+
+    cv2.imread = imread
+    cv2.imwrite = imwrite
+
+
 def run_homr(args: list[str]) -> None:
+    force_utf8_text_files()
+    allow_unicode_image_paths()
     sys.argv = ["homr", *args]
     from homr.main import main
 
     main()
+
+
+def diag() -> None:
+    import json
+    import locale
+
+    with open(os.devnull) as f:
+        open_encoding = f.encoding
+    print(
+        json.dumps(
+            {
+                "utf8_mode": sys.flags.utf8_mode,
+                "open_encoding": open_encoding,
+                "preferred_encoding": locale.getpreferredencoding(False),
+                "frozen": FROZEN,
+                "executable": sys.executable,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
 
 
 def is_read_classic(port: int) -> bool:
@@ -102,6 +183,9 @@ def is_read_classic(port: int) -> bool:
 
 def port_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        if SYSTEM != "Windows":
+            # 방금 끈 앱의 포트(TIME_WAIT)도 다시 쓸 수 있게 (서버 uvicorn 도 이렇게 연다)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
             s.bind(("127.0.0.1", port))
             return True
@@ -163,7 +247,20 @@ def main() -> None:
     args = sys.argv[1:]
     if args and args[0] == "--homr":
         setup_output("homr.log")
-        run_homr(args[1:])
+        try:
+            run_homr(args[1:])
+        except SystemExit:
+            raise
+        except BaseException:
+            # 창으로 띄우지 않고 서버에 글로 알린다 (서버가 앱 화면에 한국어로 보여 준다)
+            traceback.print_exc()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            sys.exit(1)
+        return
+    if args and args[0] == "--diag":
+        setup_output("read-classic.log")
+        diag()
         return
     setup_output("read-classic.log")
     try:

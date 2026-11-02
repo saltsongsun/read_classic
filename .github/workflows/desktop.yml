@@ -76,6 +76,10 @@ jobs:
           if (-not (Test-Path (Join-Path $desktop 'Read Classic.lnk'))) { throw '바탕화면 아이콘이 없습니다' }
           Write-Host '바탕화면 아이콘 있음'
           python desktop/smoke_test.py $exe
+      - name: 'Windows: 한글 이름 폴더(사용자 이름이 한글인 경우)에서도 되는지'
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python desktop/smoke_test.py (Join-Path $env:LOCALAPPDATA 'Programs\ReadClassic\read-classic.exe') --unicode-paths
       - name: 'Mac: dmg 안의 앱 확인 후 실행해 보기'
         if: runner.os == 'macOS'
         run: |
@@ -87,7 +91,9 @@ jobs:
           hdiutil detach /tmp/rc
       - name: 'Linux: 실행해 보기'
         if: runner.os == 'Linux'
-        run: python desktop/smoke_test.py
+        run: |
+          python desktop/smoke_test.py
+          python desktop/smoke_test.py --unicode-paths
 
       - uses: actions/upload-artifact@v4
         with:

@@ -11,7 +11,11 @@ if not args:
 img = Path(args[0])
 if img.read_bytes().startswith(b"FAIL"):
     print("Processing", img)
-    print("ValueError: no staffs found")
+    print("Exception: No staffs found")
+    sys.exit(1)
+if img.read_bytes().startswith(b"CRASH"):
+    print("Traceback (most recent call last):")
+    print("UnicodeDecodeError: 'cp949' codec can't decode byte 0xe2")
     sys.exit(1)
 xml = Path(__file__).with_name("page.musicxml").read_text(encoding="utf-8")
 img.with_suffix(".musicxml").write_text(xml, encoding="utf-8")

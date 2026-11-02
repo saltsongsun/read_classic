@@ -46,7 +46,15 @@ def test_rejects_pdf_and_empty():
 def test_reports_recognition_failure():
     r = client.post("/api/omr", files={"image": ("bad.png", b"FAIL" + PNG, "image/png")})
     assert r.status_code == 422
-    assert "no staffs found" in r.json()["detail"]
+    assert "오선이나 음표를 찾지 못했어요" in r.json()["detail"]
+
+
+def test_reports_engine_crash_in_plain_words():
+    r = client.post("/api/omr", files={"image": ("bad.png", b"CRASH" + PNG, "image/png")})
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail.startswith("악보 인식 프로그램에 문제가 생겼어요.")
+    assert "UnicodeDecodeError" in detail
 
 
 def test_cors_for_hosted_app():

@@ -21,6 +21,7 @@ import asyncio
 import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -94,6 +95,19 @@ def _read_staffs(path: Path) -> list[list[float]]:
     return staffs
 
 
+def failure_message(output: str) -> str:
+    """homr 가 남긴 기록에서 사람이 알아들을 수 있는 이유를 고른다."""
+    if "No staffs found" in output or "No noteheads found" in output:
+        return "이 쪽에서 오선이나 음표를 찾지 못했어요. (표지·해설 쪽이거나, 사진이 흐리거나 기울었을 수 있어요)"
+    if "MemoryError" in output or "bad allocation" in output or "Failed to allocate" in output:
+        return "컴퓨터 메모리가 모자라 이 쪽을 인식하지 못했어요. 다른 프로그램을 닫고 다시 해 보세요."
+    if "Failed to read" in output:
+        return "이 쪽 그림 파일을 열지 못했어요."
+    lines = [ln.strip() for ln in output.strip().splitlines() if ln.strip()]
+    last = lines[-1] if lines else ""
+    return "악보 인식 프로그램에 문제가 생겼어요." + (f" ({last[:200]})" if last else "")
+
+
 DESKTOP = os.environ.get("READ_CLASSIC_DESKTOP") == "1"  # 노트북용 앱으로 실행 중인지
 
 
@@ -145,8 +159,10 @@ async def omr(image: UploadFile) -> JSONResponse:
         out = proc.stdout
         result = src.with_suffix(".musicxml")
         if proc.returncode != 0 or not result.exists():
-            tail = (out or b"").decode("utf-8", "replace").strip().splitlines()[-5:]
-            raise HTTPException(422, "악보를 인식하지 못했습니다. " + " / ".join(tail))
+            text = (out or b"").decode("utf-8", "replace")
+            # 원인을 찾을 수 있게 전체 기록을 남긴다 (노트북 앱은 기록 파일로 간다)
+            print(f"[omr] 인식 실패 (종료 코드 {proc.returncode})\n{text}", file=sys.stderr, flush=True)
+            raise HTTPException(422, failure_message(text))
         xml = result.read_text(encoding="utf-8")
         staffs = _read_staffs(src.with_suffix(".txt"))
     return JSONResponse(

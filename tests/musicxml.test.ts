@@ -1,6 +1,6 @@
 import { DOMParser } from '@xmldom/xmldom';
 import { describe, expect, test } from 'vitest';
-import { combinePages, eventsFromSteps, parseMusicXML, toSteps, type XmlParser } from '../src/score/musicxml';
+import { combinePages, emptyPage, eventsFromSteps, parseMusicXML, toSteps, type XmlParser } from '../src/score/musicxml';
 // @ts-expect-error -- 순수 JS 모듈
 import { SCORES, toMusicXML, toRawNotes } from '../samples/scores.mjs';
 import { notesToEvents } from './harness';
@@ -79,6 +79,20 @@ describe('parseMusicXML', () => {
     const second = all.notes.filter((n) => n.page === 1);
     expect(second[0].onset).toBe(6);
     expect(second[second.length - 1].measure).toBe(4);
+  });
+
+  test('skips a page that could not be recognised', () => {
+    const a = parseMusicXML(homrLike, parser, 0);
+    const c = parseMusicXML(homrLike, parser, 2);
+    const all = combinePages([a, emptyPage(), c]);
+    expect(all.totalBeats).toBe(12);
+    expect(all.measures.map((m) => [m.index, m.page])).toEqual([
+      [1, 0],
+      [2, 0],
+      [3, 2],
+      [4, 2],
+    ]);
+    expect(all.notes.some((n) => n.page === 1)).toBe(false);
   });
 
   test('rejects broken input', () => {
