@@ -126,6 +126,12 @@ def main() -> None:
         assert b"ode-to-joy" in get("/samples/index.json"), "예제 악보 목록이 없습니다"
         # 스캔 악보 PDF(JBIG2 흑백 스캔·JPEG2000)를 그리는 pdf.js 해독기 (없으면 쪽이 백지로 그려진다)
         assert len(get("/pdfjs/wasm/jbig2.wasm")) > 10000, "PDF 스캔 그림 해독기(jbig2.wasm)가 없습니다"
+        # AI 음 인식: 모델과 실행기, 브라우저가 실행하려면 형식이 맞아야 한다
+        assert len(get("/models/basic-pitch.onnx")) > 100000, "AI 음 인식 모델이 없습니다"
+        for path, kind in (("/ort/ort-wasm-simd-threaded.wasm", "application/wasm"), ("/ort/ort-wasm-simd-threaded.mjs", "javascript")):
+            with urllib.request.urlopen(f"http://127.0.0.1:{PORT}{path}", timeout=10) as r:
+                ctype = r.headers.get("content-type", "")
+                assert kind in ctype, f"{path} 형식이 {ctype} 입니다"
         t0 = time.time()
         result = post_image(ROOT / "tests" / "omr" / "ode-to-joy-photo.jpg")
         notes = result["musicxml"].count("<pitch>")

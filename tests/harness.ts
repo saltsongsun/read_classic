@@ -1,6 +1,7 @@
 // 합성 오디오로 추적기를 돌려 정확도를 재는 도구.
 import { FeatureExtractor, LevelGate } from '../src/audio/features';
 import { buildEvents, type RawNote, type RawStep } from '../src/follow/build';
+import type { KeyStream } from '../src/audio/keyModel';
 import { ProgressEstimator } from '../src/follow/progress';
 import { ScoreFollower } from '../src/follow/tracker';
 import type { ScoreEvent } from '../src/follow/types';
@@ -70,6 +71,8 @@ export interface RunOptions extends Partial<SynthOptions> {
   /** 지나간 곳으로 돌아갈지 (기본: 콩쿠르 = 도돌이표만) */
   backward?: 'repeats' | 'free';
   repeats?: Array<{ from: number; to: number }>;
+  /** AI 음 인식 결과 (aiKeyStream 으로 미리 계산). 있으면 프레임마다 붙인다 */
+  keys?: KeyStream;
 }
 
 export function run(score: SampleScore, opts: RunOptions): RunResult {
@@ -119,6 +122,10 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
     const frames = fx.push(samples.subarray(off, off + block));
     for (const f of frames) {
       const voiced = gate.update(f.rms, f.flatness);
+      if (opts.keys) {
+        f.keys = opts.keys.at(f.time)?.note;
+        f.keyOnsets = opts.keys.onsetAround(f.time, 0.05) ?? undefined;
+      }
       const st = tracker.update(f, voiced);
       idx = st.index;
       progress.update(f.time, st.index, voiced);
@@ -171,4 +178,11 @@ export function summarize(r: RunResult, linear = true): string {
   const late = lags.filter((x) => x > 0.35).length;
   const early = lags.filter((x) => x < -0.1).length;
   return `${base} medLag=${(median(lags) * 1000).toFixed(0)}ms late=${late} early=${early} ${fin}`;
+}
+
+/** run() 과 같은 합성 연주 (AI 음 인식을 미리 돌릴 때) */
+export function performance_(score: SampleScore, opts: RunOptions): { samples: Float32Array; sampleRate: number } {
+  const play: PlayedNote[] = opts.play ?? score.notes.map((n) => ({ ...n, origOnset: n.onset }));
+  const { samples, sampleRate } = synthesize(play, { bpm: score.bpm, ...opts } as SynthOptions);
+  return { samples, sampleRate };
 }

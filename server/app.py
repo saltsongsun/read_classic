@@ -32,6 +32,8 @@ import time
 from importlib import metadata
 from pathlib import Path
 
+import mimetypes
+
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -39,6 +41,11 @@ from fastapi.staticfiles import StaticFiles
 
 from server.update import current as app_version
 from server.update import updater
+
+# 웹 앱 파일 형식: Windows 는 레지스트리 설정에 따라 .mjs·.wasm 을 엉뚱하게 알려 줄 수 있다.
+# (PDF 해독 워커·AI 음 인식 실행기는 이 형식이 맞아야 브라우저가 실행한다)
+for _ext, _type in ((".mjs", "text/javascript"), (".js", "text/javascript"), (".wasm", "application/wasm"), (".onnx", "application/octet-stream")):
+    mimetypes.add_type(_type, _ext)
 
 HOMR_CMD = shlex.split(os.environ.get("HOMR_CMD", "homr"))
 HOMR_WORKER_CMD = shlex.split(os.environ["HOMR_WORKER_CMD"]) if os.environ.get("HOMR_WORKER_CMD") else None

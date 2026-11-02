@@ -2,6 +2,8 @@ node_modules/
 dist/
 # pdf.js 해독기·글꼴 (빌드할 때 node_modules 에서 복사)
 public/pdfjs/
+# AI 음 인식 실행기 (빌드할 때 node_modules 에서 복사)
+public/ort/
 *.log
 .DS_Store
 # 테스트가 만드는 파일

@@ -19,6 +19,10 @@ export interface AudioFrame {
    * 페달·홀 잔향으로 앞 음들이 계속 울려도 "지금 친 음"을 가려낼 수 있다.
    */
   attack: Float64Array;
+  /** (AI 음 인식을 켰을 때) 88건반(A0~C8) "울리는 음" 확률 */
+  keys?: Float32Array;
+  /** (AI 음 인식을 켰을 때) 88건반 "방금 친 음" 확률 (최근 몇 시점의 최대) */
+  keyOnsets?: Float32Array;
 }
 
 export interface FeatureOptions {

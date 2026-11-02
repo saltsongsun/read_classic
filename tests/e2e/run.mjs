@@ -61,6 +61,8 @@ const base = server.resolvedUrls.local[0];
 const CASES = [
   { id: 'ode-to-joy', minNear: 0.85 },
   { id: 'bach-prelude-c', minNear: 0.8 },
+  // AI 음 인식(88건반)을 켜고: 웹 워커 + wasm 모델이 실제 브라우저에서 돌아가는지
+  { id: 'bach-prelude-c', ai: true, minNear: 0.8 },
   // 사진 악보: 업로드 → 인식 서버 → 원본 사진 위에서 따라가기, 남은 시간
   { id: 'ode-to-joy', photo: 'tests/omr/ode-to-joy-photo.jpg', minMeasure: 0.85 },
 ];
@@ -97,21 +99,29 @@ for (const c of CASES) {
       i.dispatchEvent(new Event('change'));
     });
   }
+  if (c.ai) {
+    await page.click('#settingsToggle');
+    await page.check('#ai');
+    await page.click('#settingsToggle');
+  }
   await page.waitForTimeout(500);
 
   await page.click('#micBtn');
+  let sawAi = false;
   const t0 = Date.now();
   const samples = [];
   const total = truth.duration + 1.5;
   let shot = false;
   while ((Date.now() - t0) / 1000 < total + (c.photo ? 3 : 0)) {
     const st = await page.evaluate(() => ({
+      status: document.getElementById('status').textContent,
       pos: window.__readClassic.position,
       measure: window.__readClassic.measure,
       progress: window.__readClassic.progress,
       ending: document.getElementById('dock').classList.contains('ending'),
     }));
     const t = (Date.now() - t0) / 1000;
+    if (/AI 음 인식/.test(st.status ?? '')) sawAi = true;
     samples.push({ t, ...st });
     if (!shot && t > truth.duration * 0.55) {
       await page.screenshot({ path: join(outDir, `${c.id}-playing.png`) });
@@ -121,14 +131,14 @@ for (const c of CASES) {
   }
   await page.screenshot({ path: join(outDir, `${c.id}-end.png`) });
 
-  // 마이크 시작 지연을 모르므로 -0.6 ~ +0.8초 사이에서 가장 잘 맞는 지연을 고른다
+  // 마이크 시작 지연을 모르므로 -0.6 ~ +1.2초 사이에서 가장 잘 맞는 지연을 고른다 (AI 음 인식은 0.3~0.5초 늦다)
   const truthAt = (t) => {
     let idx = -1;
     for (const e of truth.timeline) if (e.time <= t) idx = e.index;
     return idx;
   };
   let best = { near: 0, delay: 0 };
-  for (let d = -0.6; d <= 0.8; d += 0.05) {
+  for (let d = -0.6; d <= 1.2; d += 0.05) {
     const considered = samples.filter((s) => truthAt(s.t - d - 0.15) >= 0 && s.t - d < truth.timeline.at(-1).time + 0.3);
     const ok = considered.filter((s) => Math.abs(s.pos - truthAt(s.t - d - 0.15)) <= 1).length;
     const near = considered.length ? ok / considered.length : 0;
@@ -168,10 +178,10 @@ for (const c of CASES) {
   }
   const final = samples.at(-1).pos;
   const last = truth.timeline.length - 1;
-  const pass = best.near >= c.minNear && final === last && errors.length === 0;
+  const pass = best.near >= c.minNear && final === last && errors.length === 0 && (!c.ai || sawAi);
   failed ||= !pass;
   console.log(
-    `${pass ? 'PASS' : 'FAIL'} ${c.id}: ±1음 ${(best.near * 100).toFixed(1)}% (지연 ${best.delay.toFixed(2)}s), 마지막 위치 ${final}/${last}` +
+    `${pass ? 'PASS' : 'FAIL'} ${c.id}${c.ai ? ` (AI 음 인식 ${sawAi ? '동작' : '안 됨'})` : ''}: ±1음 ${(best.near * 100).toFixed(1)}% (지연 ${best.delay.toFixed(2)}s), 마지막 위치 ${final}/${last}` +
       (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
   );
   await browser.close();

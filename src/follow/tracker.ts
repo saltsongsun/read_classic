@@ -184,6 +184,67 @@ export function ringingTemplates(events: ScoreEvent[]): Float64Array[] {
   });
 }
 
+/** 88건반 템플릿 (희소): 건반 번호(0=A0)와 무게, L2 정규화 */
+export interface KeyTemplate {
+  keys: Int16Array;
+  w: Float32Array;
+}
+
+const KEY_LOW = 21;
+const KEY_COUNT = 88;
+
+function keyTemplate(weights: Map<number, number>): KeyTemplate {
+  const entries = [...weights].filter(([m, w]) => w > 0 && m >= KEY_LOW && m < KEY_LOW + KEY_COUNT);
+  const norm = Math.sqrt(entries.reduce((a, [, w]) => a + w * w, 0)) || 1;
+  return { keys: Int16Array.from(entries.map(([m]) => m - KEY_LOW)), w: Float32Array.from(entries.map(([, w]) => w / norm)) };
+}
+
+/**
+ * AI 음 인식용 88건반 템플릿 (옥타브까지 구분).
+ * - sustain: 새로 치는 음 + 계속 울리는 음(조금 약하게)
+ * - wet: 거기에 페달·잔향으로 남아 울리는 앞 음들 (모델은 실제로 울리는 음을 모두 짚는다)
+ * - fresh: 새로 치는 음만 ("방금 친 음" 확률과 비교)
+ */
+export function keyTemplates(events: ScoreEvent[]): { sustain: KeyTemplate[]; wet: KeyTemplate[]; fresh: KeyTemplate[] } {
+  const onset: number[] = [];
+  let b = 0;
+  for (const e of events) {
+    onset.push(b);
+    b += e.beats;
+  }
+  const sustain: KeyTemplate[] = [];
+  const wet: KeyTemplate[] = [];
+  const fresh: KeyTemplate[] = [];
+  events.forEach((ev, j) => {
+    const base = new Map<number, number>();
+    for (const m of ev.held) base.set(m, 0.6);
+    for (const m of ev.notes) base.set(m, 1);
+    sustain.push(keyTemplate(base));
+    fresh.push(keyTemplate(new Map(ev.notes.map((m) => [m, 1]))));
+    const ring = new Map(base);
+    for (let k = j - 1; k >= 0 && onset[j] - onset[k] <= RING.window; k--) {
+      const w = 0.8 * Math.exp(-(onset[j] - onset[k]) / RING.tau);
+      for (const m of events[k].notes) if (!ring.has(m)) ring.set(m, w);
+    }
+    wet.push(keyTemplate(ring));
+  });
+  return { sustain, wet, fresh };
+}
+
+/** 템플릿과 확률 벡터의 코사인 유사도 (확률 벡터의 크기 inv 는 미리 계산) */
+function keyDot(t: KeyTemplate, p: Float32Array, inv: number): number {
+  let d = 0;
+  for (let i = 0; i < t.keys.length; i++) d += t.w[i] * p[t.keys[i]];
+  return d * inv;
+}
+
+/** AI 음 인식 결과를 얼마나 믿을지 (나머지는 크로마). 옥타브를 잘못 읽은 악보도 크로마로 어느 정도 맞춘다 */
+// 시험 결과: 0.5 에서 페달·잔향 속 빽빽한 음형은 크게 좋아지고(바흐 ±1음 58→76%) 단순한 선율은 그대로였다.
+// 더 높이면 페달을 밟은 느린 선율에서 앞 음이 계속 울리는 것에 끌려 오히려 나빠졌다.
+const KEY_WEIGHT = 0.5;
+/** 이보다 "울리는 음" 확률 합이 작으면 (조용하거나 잡음) AI 결과를 쓰지 않는다 */
+const KEY_MIN_ENERGY = 0.25;
+
 /**
  * 머문 시간 비율 r(= 지난 프레임 / 예상 프레임)에 따른 다음 음 전이 확률.
  * - 예상보다 훨씬 빨리 넘어가는 것도 (빠르게 연주할 때) 가능하도록 바닥값을 둔다.
@@ -227,6 +288,8 @@ interface HistoryFrame {
   chroma: Float64Array;
   attack: Float64Array;
   onset: number;
+  keys?: Float32Array;
+  keyOnsets?: Float32Array;
   logLik: number; // 주 추적기가 이 프레임에서 얻은 로그 예측우도
 }
 
@@ -239,6 +302,9 @@ export class ScoreFollower {
   private readonly tmplA: Float64Array[]; // 어택 상태 템플릿 (이전 음이 섞여 있음)
   private readonly tmplNew: Float64Array[]; // 이 이벤트에서 새로 치는 음만
   private readonly repeated: Uint8Array; // 바로 앞 이벤트와 같은 음(들)인지
+  private readonly keyS: KeyTemplate[]; // AI 음 인식용 (단위별)
+  private readonly keyWet: KeyTemplate[];
+  private readonly keyFresh: KeyTemplate[];
   private readonly expected: Float64Array; // 지속 상태의 예상 프레임 수
 
   private cur: Belief;
@@ -302,6 +368,10 @@ export class ScoreFollower {
     });
     // 어택 상태는 단위의 첫 음과 비교
     this.tmplNew = this.units.map((u) => chromaTemplate({ ...events[u.first], held: [] }));
+    const kt = keyTemplates(unitEvents);
+    this.keyS = kt.sustain;
+    this.keyWet = kt.wet;
+    this.keyFresh = this.units.map((u) => keyTemplates([{ ...events[u.first], held: [] }]).fresh[0]);
     const n = this.n;
     this.repeated = new Uint8Array(n);
     for (let j = 1; j < n; j++) {
@@ -430,7 +500,7 @@ export class ScoreFollower {
     [this.cur, this.next] = [this.next, this.cur];
 
     // 최근 연주 기록 (재탐색용)
-    this.history.push({ chroma: frame.chroma, attack: frame.attack, onset: frame.onset, logLik: Math.log(total) });
+    this.history.push({ chroma: frame.chroma, attack: frame.attack, onset: frame.onset, keys: frame.keys, keyOnsets: frame.keyOnsets, logLik: Math.log(total) });
     if (this.history.length > this.historyLen) this.history.shift();
     if (++this.sinceReloc >= RELOC_EVERY && this.history.length >= this.historyLen) {
       this.sinceReloc = 0;
@@ -516,17 +586,50 @@ export class ScoreFollower {
     const pOnArep = 0.06 + 0.94 * o; // 같은 음을 다시 칠 때는 온셋이 거의 꼭 있어야 한다
     const pOnS = 1 - 0.85 * o; // 지속 상태에서 이 정도 온셋이 보일 가능성
     const { a, s } = b;
+    // AI 음 인식: 88건반 확률. 소리가 거의 없으면 쓰지 않는다
+    const keys = frame.keys;
+    let keyInv = 0;
+    let keyOnInv = 0;
+    if (keys) {
+      let e = 0;
+      let n2 = 0;
+      for (let k = 0; k < keys.length; k++) {
+        e += keys[k];
+        n2 += keys[k] * keys[k];
+      }
+      if (e >= KEY_MIN_ENERGY && n2 > 0) keyInv = 1 / Math.sqrt(n2);
+    }
+    const kon = frame.keyOnsets;
+    let konMax = 0;
+    if (keyInv > 0 && kon) {
+      let n2 = 0;
+      for (let k = 0; k < kon.length; k++) {
+        n2 += kon[k] * kon[k];
+        if (kon[k] > konMax) konMax = kon[k];
+      }
+      if (konMax > 0.3 && n2 > 0) keyOnInv = 1 / Math.sqrt(n2);
+    }
     let total = 0;
     for (let j = lo; j <= hi; j++) {
       if (a[j] > 1e-300) {
         let raw = dot(chroma, this.tmplA[j]);
         if (lam > 0) raw = (1 - lam) * raw + lam * dot(attack, this.tmplNew[j]);
+        if (keyInv > 0) {
+          let kraw = keyDot(this.keyS[j], keys!, keyInv);
+          // 방금 친 건반이 이 음과 맞는지 (화음 속 각 음까지)
+          if (keyOnInv > 0) kraw = 0.5 * kraw + 0.5 * keyDot(this.keyFresh[j], kon!, keyOnInv);
+          raw = KEY_WEIGHT * kraw + (1 - KEY_WEIGHT) * raw;
+        }
         const sim = Math.max(SIM_FLOOR, raw);
         a[j] *= Math.exp(beta * (sim - 1)) * (this.repeated[j] ? pOnArep : pOnA);
       } else a[j] = 0;
       if (s[j] > 1e-300) {
         let raw = dot(chroma, this.tmplS[j]);
         if (this.tmplWet) raw = Math.max(raw, dot(chroma, this.tmplWet[j]));
+        if (keyInv > 0) {
+          const kraw = Math.max(keyDot(this.keyS[j], keys!, keyInv), keyDot(this.keyWet[j], keys!, keyInv));
+          raw = KEY_WEIGHT * kraw + (1 - KEY_WEIGHT) * raw;
+        }
         const sim = Math.max(SIM_FLOOR, raw);
         s[j] *= Math.exp(beta * (sim - 1)) * pOnS;
       } else s[j] = 0;
@@ -589,6 +692,8 @@ export class ScoreFollower {
       frame.chroma = h.chroma;
       frame.attack = h.attack;
       frame.onset = h.onset;
+      frame.keys = h.keys;
+      frame.keyOnsets = h.keyOnsets;
       let tot: number;
       if (i === start) tot = this.observe(b, frame, lo, hi);
       else {

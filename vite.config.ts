@@ -23,8 +23,24 @@ function pdfjsAssets(): Plugin {
   return { name: 'pdfjs-assets', buildStart: copy, configureServer: copy };
 }
 
+/** AI 음 인식 실행기(onnxruntime-web 의 wasm)를 public/ort/ 로 복사한다 */
+function ortAssets(): Plugin {
+  const copy = () => {
+    const src = join(root, 'node_modules', 'onnxruntime-web', 'dist');
+    const dst = join(root, 'public', 'ort');
+    mkdirSync(dst, { recursive: true });
+    for (const f of ['ort-wasm-simd-threaded.wasm', 'ort-wasm-simd-threaded.mjs']) {
+      if (existsSync(join(src, f))) cpSync(join(src, f), join(dst, f));
+    }
+  };
+  return { name: 'ort-assets', buildStart: copy, configureServer: copy };
+}
+
 export default defineConfig({
-  plugins: [pdfjsAssets()],
+  plugins: [pdfjsAssets(), ortAssets()],
+  worker: { format: 'es' },
+  // 개발 서버가 처음 쓰는 순간에 미리 묶느라 페이지를 새로 고치지 않게
+  optimizeDeps: { include: ['onnxruntime-web/wasm', 'pdfjs-dist'] },
   // GitHub Pages 등 하위 경로에 올려도 동작하도록 상대 경로로 빌드
   base: './',
   server: {

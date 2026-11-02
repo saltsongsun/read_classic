@@ -4,6 +4,8 @@ import { FeatureExtractor, LevelGate, type AudioFrame } from './audio/features';
 import { startMic, type MicHandle } from './audio/mic';
 import { formatDuration, ProgressEstimator, type ProgressOptions, type ProgressSnapshot } from './follow/progress';
 import { ScoreFollower, type RepeatJump } from './follow/tracker';
+import { KeyEngine } from './audio/keyEngine';
+import { KeyStream } from './audio/keyModel';
 import type { ScoreEvent } from './follow/types';
 import { layoutEvents } from './score/imageLayout';
 import { ImageScoreView, type PageImage } from './score/imageView';
@@ -66,6 +68,7 @@ const el = {
   omrServerStatus: $('omrServerStatus'),
   showTicks: $<HTMLInputElement>('showTicks'),
   practice: $<HTMLInputElement>('practice'),
+  ai: $<HTMLInputElement>('ai'),
   autoScroll: $<HTMLInputElement>('autoScroll'),
   toast: $('toast'),
   getApp: $('getApp'),
@@ -113,6 +116,8 @@ interface GlobalPrefs {
   showTicks: boolean;
   /** 연습 모드: 앞 구절로 돌아가 다시 치면 따라간다 (끄면 지나간 곳으로 돌아가지 않음, 도돌이표만 예외) */
   practice: boolean;
+  /** AI 음 인식 (null: 노트북 앱이면 켜고 웹이면 끔) */
+  ai: boolean | null;
   /** 사진 악보 확대 비율 (MusicXML 악보와 따로) */
   imageZoom: number;
 }
@@ -126,6 +131,7 @@ const prefs: GlobalPrefs = lib.loadPrefs<GlobalPrefs>('global', {
   omrServer: '',
   showTicks: false,
   practice: false,
+  ai: null,
   imageZoom: 1,
 });
 const savePrefs = () => lib.savePrefs('global', prefs);
@@ -682,6 +688,10 @@ function createFollower(): void {
   if (!loaded) return;
   const sampleRate = mic?.sampleRate ?? 48000;
   fx = new FeatureExtractor(sampleRate);
+  keyStream = keyEngine && aiWanted() && mic ? new KeyStream(sampleRate, keyEngine.run) : null;
+  aiPending = [];
+  aiUsed = 0;
+  aiSkipped = 0;
   follower = new ScoreFollower(loaded.events, {
     hopSec: fx.hopSec,
     bpm: currentBpm(),
@@ -738,6 +748,7 @@ async function startListening(): Promise<void> {
   micStarting = true;
   el.micBtn.disabled = true;
   try {
+    await ensureKeyEngine();
     mic = await startMic(onSamples);
     gate.reset();
     const keepProgress = progress;
@@ -779,19 +790,75 @@ function stopListening(): void {
 function onSamples(block: Float32Array): void {
   if (!fx || !follower) return;
   const now = performance.now() / 1000;
-  for (const f of fx.push(block)) {
-    const voiced = gate.update(f.rms, f.flatness);
-    const st = follower.update(f, voiced);
-    progress?.update(now, st.index, voiced);
-    // 시간 검증: 위치를 놓쳤으면 흐른 시간으로 어림한 곳 주변도 찾아보게 한다
-    follower.setHint(progress?.timeHint() ?? null);
-    lastFrame = f;
-    lastVoiced = voiced;
-    if (voiced) {
-      lastVoicedAt = performance.now();
-      confidence = st.confidence;
-    }
-    if (st.index !== position) setPosition(st.index, false);
+  const frames = fx.push(block);
+  if (frames.length) lastFrame = frames[frames.length - 1]; // 레벨·음 막대는 바로 보여 준다
+  if (!keyStream) {
+    for (const f of frames) processFrame(f, now);
+    return;
+  }
+  // AI 음 인식: 결과가 나온 시각까지의 프레임만 그 결과를 붙여 추적한다 (그만큼 조금 늦게 따라간다).
+  // 기기가 느려 너무 밀리면 그 프레임은 AI 없이 처리해서 실시간을 지킨다.
+  keyStream.push(block);
+  aiPending.push(...frames);
+  const latest = aiPending.length ? aiPending[aiPending.length - 1].time : 0;
+  while (aiPending.length) {
+    const f = aiPending[0];
+    const ready = f.time <= keyStream.readyUntil;
+    if (!ready && latest - f.time < AI_MAX_LAG) break;
+    aiPending.shift();
+    if (ready) {
+      f.keys = keyStream.at(f.time)?.note;
+      f.keyOnsets = keyStream.onsetAround(f.time, 0.05) ?? undefined;
+      aiUsed++;
+    } else aiSkipped++;
+    processFrame(f, now);
+  }
+  if (aiSkipped > 200 && aiSkipped > aiUsed && !aiSlowWarned) {
+    aiSlowWarned = true;
+    toast('이 기기에서는 AI 음 인식이 느려 일부만 쓰고 있어요. 설정에서 끌 수 있어요.');
+  }
+}
+
+/** 프레임 하나로 추적·진행률을 갱신한다 */
+function processFrame(f: AudioFrame, now: number): void {
+  if (!follower) return;
+  const voiced = gate.update(f.rms, f.flatness);
+  const st = follower.update(f, voiced);
+  progress?.update(now, st.index, voiced);
+  // 시간 검증: 위치를 놓쳤으면 흐른 시간으로 어림한 곳 주변도 찾아보게 한다
+  follower.setHint(progress?.timeHint() ?? null);
+  lastVoiced = voiced;
+  if (voiced) {
+    lastVoicedAt = performance.now();
+    confidence = st.confidence;
+  }
+  if (st.index !== position) setPosition(st.index, false);
+}
+
+// ---------- AI 음 인식 ----------
+const AI_MAX_LAG = 1.5; // 이보다 밀리면 AI 없이 처리 (초)
+let keyEngine: KeyEngine | null = null;
+let keyEngineFailed = false;
+let keyStream: KeyStream | null = null;
+let aiPending: AudioFrame[] = [];
+let aiUsed = 0;
+let aiSkipped = 0;
+let aiSlowWarned = false;
+let appDesktop = false;
+
+/** AI 음 인식을 쓸지: 설정이 없으면 노트북 앱에서는 켜고 웹에서는 끈다 */
+function aiWanted(): boolean {
+  return !keyEngineFailed && (prefs.ai ?? appDesktop);
+}
+
+async function ensureKeyEngine(): Promise<void> {
+  if (keyEngine || !aiWanted()) return;
+  setStatus('AI 음 인식 준비 중…');
+  try {
+    keyEngine = await KeyEngine.create();
+  } catch (e) {
+    keyEngineFailed = true;
+    toast(`AI 음 인식을 켜지 못해 기본 방식으로 따라가요. (${(e as Error).message})`);
   }
 }
 
@@ -874,7 +941,7 @@ function updateDock(): void {
   else if (s?.check === 'lost') setStatus('위치를 놓쳤어요 · 흐른 시간으로 남은 시간을 계산하며 다시 찾는 중', true);
   else if (quiet) setStatus(position < 0 ? '첫 음을 기다리는 중 · 듣는 중' : '기다리는 중 · 소리가 나면 이어서 따라가요');
   else if (confidence < 0.35) setStatus('위치를 찾는 중…', true);
-  else setStatus('따라가는 중');
+  else setStatus(keyStream ? '따라가는 중 · AI 음 인식' : '따라가는 중');
 }
 
 /**
@@ -1097,6 +1164,7 @@ el.alertSec.value = String(prefs.alertSec);
 el.omrServer.value = prefs.omrServer;
 el.showTicks.checked = prefs.showTicks;
 el.practice.checked = prefs.practice;
+el.ai.checked = aiWanted();
 syncSettingLabels();
 el.sensitivity.addEventListener('input', () => {
   prefs.sensitivity = Number(el.sensitivity.value);
@@ -1123,6 +1191,12 @@ el.omrServer.addEventListener('change', () => {
   prefs.omrServer = el.omrServer.value.trim();
   savePrefs();
   void refreshServerStatus(el.omrServerStatus);
+});
+el.ai.addEventListener('change', () => {
+  prefs.ai = el.ai.checked;
+  keyEngineFailed = false;
+  savePrefs();
+  if (mic) toast('듣기를 멈췄다가 다시 시작하면 적용돼요.');
 });
 el.practice.addEventListener('change', () => {
   prefs.practice = el.practice.checked;
@@ -1203,6 +1277,8 @@ async function setupAppMode(): Promise<void> {
   el.getAppPage.href = LAPTOP_APP.page;
   const st = await checkServer(prefs.omrServer);
   el.quitRow.hidden = !st.desktop;
+  appDesktop = st.desktop;
+  el.ai.checked = aiWanted();
   el.getApp.hidden = st.ok;
   if (st.desktop) {
     el.versionRow.hidden = false;
