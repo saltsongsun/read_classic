@@ -186,6 +186,35 @@ def is_read_classic(port: int) -> bool:
         return False
 
 
+def running_build(port: int) -> int | None:
+    """이 포트에서 돌고 있는 Read Classic 의 빌드 번호 (예전 판은 번호가 없어 0). 없으면 None."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1) as r:
+            info = json.loads(r.read())
+    except Exception:
+        return None
+    if "engine" not in info:
+        return None
+    try:
+        return int((info.get("app") or {}).get("build") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def stop_old(port: int) -> bool:
+    """예전 판이 돌고 있으면 끄게 하고 포트가 비기를 기다린다."""
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/api/shutdown", data=b"", method="POST")
+        urllib.request.urlopen(req, timeout=3).read()
+    except Exception:
+        pass
+    for _ in range(40):
+        if running_build(port) is None:
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def port_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         if SYSTEM != "Windows":
@@ -238,7 +267,15 @@ def serve(args: list[str]) -> None:
         port = int(args[args.index("--port") + 1])
 
     print(f"Read Classic 시작 ({time.strftime('%Y-%m-%d %H:%M:%S')})", flush=True)
-    if is_read_classic(port):
+    load_version()
+    mine = int(os.environ.get("READ_CLASSIC_BUILD", "0") or 0)
+    running = running_build(port)
+    if running is not None and running < mine:
+        # 새 판을 설치했는데 예전 판이 아직 뒤에서 돌고 있다: 예전 판을 끄고 새 판으로 연다
+        # (그대로 두면 아이콘을 눌러도 예전 판 화면이 열린다)
+        print(f"예전 판(빌드 {running})이 켜져 있어 끄고 새 판(빌드 {mine})으로 엽니다", flush=True)
+        stop_old(port)
+    elif running is not None:
         # 이미 켜져 있으면 브라우저만 다시 연다
         print(f"이미 실행 중이에요 → http://localhost:{port}", flush=True)
         if open_browser:
@@ -251,7 +288,6 @@ def serve(args: list[str]) -> None:
                 port = p
                 break
 
-    load_version()
     os.environ.setdefault("STATIC_DIR", str(resource_dir() / "web"))
     os.environ["READ_CLASSIC_DESKTOP"] = "1"  # 앱 안의 "앱 끄기" 버튼을 켠다
     from server import app as server_app

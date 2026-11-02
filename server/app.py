@@ -327,6 +327,17 @@ async def omr(image: UploadFile) -> JSONResponse:
     )
 
 
+@app.middleware("http")
+async def no_stale_page(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """화면(index.html)은 늘 새로 받게 한다. 업데이트 뒤 브라우저가 예전 화면을 저장해 둔 채 보여 주지 않게.
+    (나머지 파일은 이름에 내용 해시가 들어 있어 그대로 저장해 둬도 된다)"""
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith(".html") or path.endswith("/index.json") or path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 if STATIC_DIR.is_dir():
     # 같은 주소에서 웹 앱도 함께 제공 (http://localhost:8000)
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="web")
