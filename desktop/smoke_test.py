@@ -5,7 +5,7 @@
 
 - 묶음이 UTF-8 모드로 도는지 (한국어 Windows 의 cp949 기본 인코딩 때문에 인식이 멈추지 않게)
 - 묶음을 실행해서 웹 앱이 열리는지
-- 예제 사진(tests/omr/ode-to-joy-photo.jpg)을 인식해서 음표·줄 위치가 나오는지
+- 예제 사진(tests/omr/ode-to-joy-photo.jpg)을 인식해서 음표·줄 위치가 나오는지 (켜 둔 인식 작업자로)
 - 프록시를 막아 인터넷이 없는 상태에서도 되는지 (인식 중 무언가를 내려받으려 하면 실패한다)
 - --unicode-paths: 프로그램과 임시 폴더를 한글 이름 폴더에 두고도 되는지
   (Windows 사용자 이름이 한글이면 설치 폴더·임시 폴더 경로에 한글이 들어간다)
@@ -129,6 +129,12 @@ def main() -> None:
         notes = result["musicxml"].count("<pitch>")
         print(f"인식: {time.time() - t0:.1f}초, 음표 {notes}개, 줄 {len(result['staffs'])}개")
         assert notes >= 55, "음표를 충분히 인식하지 못했습니다"
+        assert result.get("worker") is True, "인식 작업자(--homr-worker)로 처리되지 않았습니다 (쪽마다 따로 실행됨)"
+        # 둘째 쪽은 켜 둔 작업자가 바로 처리한다
+        t1 = time.time()
+        again = post_image(ROOT / "tests" / "omr" / "ode-to-joy-photo.jpg")
+        print(f"둘째 쪽: {time.time() - t1:.1f}초, 작업자 {again.get('worker')}")
+        assert again["musicxml"].count("<pitch>") == notes
         assert len(result["staffs"]) == 3, "줄 위치가 3개가 아닙니다"
         assert health.get("desktop") is True, "노트북 앱 표시(desktop)가 꺼져 있습니다"
         print("OK: 노트북용 묶음이 인터넷 없이 동작합니다")

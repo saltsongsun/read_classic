@@ -1,0 +1,23 @@
+<!doctype html><html><body><script type="module">
+import * as pdfjs from './pdfjs/build/pdf.min.mjs';
+pdfjs.GlobalWorkerOptions.workerSrc = './pdfjs/build/pdf.worker.min.mjs';
+// 앱의 pdfToPages 와 같은 방식 (가로 폭과 형식을 바꿔 볼 수 있게)
+window.renderPdf = async (url, width, type, quality) => {
+  const data = new Uint8Array(await (await fetch(url)).arrayBuffer());
+  const doc = await pdfjs.getDocument({ data }).promise;
+  const out = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(6, width / base.width) });
+    const c = document.createElement('canvas');
+    c.width = Math.round(viewport.width); c.height = Math.round(viewport.height);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvas: c, canvasContext: ctx, viewport }).promise;
+    out.push(c.toDataURL(type, quality));
+  }
+  return out;
+};
+window.ready = true;
+</script></body></html>

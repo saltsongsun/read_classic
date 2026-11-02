@@ -204,16 +204,46 @@ if (omrReady) {
   await page.click('#importStart');
   let toastText = '';
   try {
-    await page.waitForFunction(() => /건너뛰었어요/.test(document.getElementById('toast').textContent ?? ''), null, { timeout: 120000 });
+    await page.waitForFunction(() => /읽지 못했어요/.test(document.getElementById('toast').textContent ?? ''), null, { timeout: 120000 });
     toastText = await page.textContent('#toast');
   } catch {
     toastText = (await page.textContent('#importProgress')) ?? '';
   }
   const st = await page.evaluate(() => ({ kind: window.__readClassic.kind, events: window.__readClassic.events.length }));
-  const pass = st.kind === 'image' && st.events > 50 && /2쪽은 읽지 못해/.test(toastText) && errors.length === 0;
+  const pass = st.kind === 'image' && st.events > 50 && /2쪽은 읽지 못했어요/.test(toastText) && errors.length === 0;
   failed ||= !pass;
   console.log(
     `${pass ? 'PASS' : 'FAIL'} 한 쪽 인식 실패: 악보 ${st.kind}, 음 ${st.events}개, 알림 "${toastText.trim()}"` +
+      (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
+  );
+  await browser.close();
+}
+
+// PDF: 표지·머리말 쪽은 오선이 없어 자동으로 빼고 악보 쪽만 인식한다
+if (omrReady) {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(base);
+  await page.waitForFunction(() => window.__readClassic?.events.length > 0, null, { timeout: 30000 });
+  await page.setInputFiles('#fileInput', join(root, 'tests/pages/cover-and-music.pdf'));
+  await page.waitForFunction(() => document.querySelectorAll('#importPages li').length === 3, null, { timeout: 60000 });
+  const excluded = await page.$$eval('#importPages li', (ls) => ls.map((l) => l.classList.contains('excluded')));
+  await page.click('#importStart');
+  let toastText = '';
+  try {
+    await page.waitForFunction(() => /저장했어요/.test(document.getElementById('toast').textContent ?? ''), null, { timeout: 120000 });
+    toastText = await page.textContent('#toast');
+  } catch {
+    toastText = (await page.textContent('#importProgress')) ?? '';
+  }
+  const st = await page.evaluate(() => ({ kind: window.__readClassic.kind, events: window.__readClassic.events.length }));
+  const pass =
+    JSON.stringify(excluded) === JSON.stringify([true, true, false]) && /\(1쪽,/.test(toastText) && st.kind === 'image' && st.events > 50 && errors.length === 0;
+  failed ||= !pass;
+  console.log(
+    `${pass ? 'PASS' : 'FAIL'} PDF 표지 건너뛰기: 뺀 쪽 ${JSON.stringify(excluded)}, 악보 ${st.kind}, 음 ${st.events}개, 알림 "${toastText.trim()}"` +
       (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
   );
   await browser.close();

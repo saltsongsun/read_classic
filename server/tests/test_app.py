@@ -64,3 +64,40 @@ def test_cors_for_hosted_app():
     )
     assert r.status_code == 200
     assert r.headers.get("access-control-allow-origin") in ("*", "https://example.github.io")
+
+
+def test_worker_keeps_the_engine_running(monkeypatch):
+    from server import app as server_app
+
+    worker = server_app.HomrWorker([sys.executable, str(HERE / "fake_worker.py")])
+    monkeypatch.setattr(server_app, "WORKER", worker)
+    try:
+        for _ in range(2):
+            r = client.post("/api/omr", files={"image": ("page.png", PNG, "image/png")})
+            assert r.status_code == 200, r.text
+            assert r.json()["worker"] is True
+        assert worker.jobs == 2
+        first = worker.proc.pid
+        # 인식 실패는 작업자가 그대로 알려 준다 (작업자는 계속 산다)
+        r = client.post("/api/omr", files={"image": ("bad.png", b"FAIL" + PNG, "image/png")})
+        assert r.status_code == 422
+        assert worker.proc.pid == first
+    finally:
+        worker.close()
+
+
+def test_worker_crash_falls_back_and_restarts(monkeypatch):
+    from server import app as server_app
+
+    worker = server_app.HomrWorker([sys.executable, str(HERE / "fake_worker.py")])
+    monkeypatch.setattr(server_app, "WORKER", worker)
+    try:
+        r = client.post("/api/omr", files={"image": ("die.png", b"DIE" + PNG, "image/png")})
+        # 작업자가 죽어도 따로 실행해서 결과를 낸다 (fake_homr 는 DIE 를 보통 그림처럼 처리)
+        assert r.status_code == 200, r.text
+        assert r.json()["worker"] is False
+        r = client.post("/api/omr", files={"image": ("page.png", PNG, "image/png")})
+        assert r.status_code == 200
+        assert worker.proc is not None and worker.proc.poll() is None  # 다시 켜졌다
+    finally:
+        worker.close()

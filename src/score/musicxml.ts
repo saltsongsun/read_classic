@@ -41,6 +41,8 @@ export interface ParsedScore {
   totalBeats: number;
   /** 빠르기 표시들 (박 순서) */
   tempos?: TempoMark[];
+  /** 이 쪽 끝의 마디 길이 (박자표, 4분음표 수) — 다음 쪽이 이어받는다 */
+  measureQuarters?: number;
 }
 
 export interface ScoreStep {
@@ -84,7 +86,15 @@ function imgposOf(note: Element): ImgPos | undefined {
   return undefined;
 }
 
-export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(), page = 0): ParsedScore {
+export interface ParseOptions {
+  /**
+   * 박자표가 없을 때 쓸 마디 길이 (4분음표 수). PDF 둘째 쪽부터는 박자표가 다시 적혀 있지 않으므로
+   * 앞 쪽의 마지막 박자를 이어받는다.
+   */
+  measureQuarters?: number;
+}
+
+export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(), page = 0, opts: ParseOptions = {}): ParsedScore {
   const doc = parser.parseFromString(text, 'application/xml');
   const root = doc.documentElement;
   if (!root || root.nodeName === 'parsererror' || doc.getElementsByTagName('parsererror').length > 0) {
@@ -100,10 +110,11 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
   let measures: ParsedMeasure[] = [];
   let bpm: number | undefined;
   const tempos: TempoMark[] = [];
+  let lastQuarters = opts.measureQuarters ?? 4;
 
   kids(root, 'part').forEach((part, partIndex) => {
     let divisions = 1;
-    let measureQuarters = 4;
+    let measureQuarters = opts.measureQuarters ?? 4;
     let measureStart = 0;
     const partMeasures: ParsedMeasure[] = [];
     const pendingTies = new Map<string, ParsedNote>();
@@ -192,6 +203,7 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
         len = measureQuarters;
       }
       partMeasures.push({ index: measureNo, page, system, onset: start, duration: len });
+      if (partIndex === 0) lastQuarters = measureQuarters;
       measureStart = start + len;
     });
     if (partIndex === 0 || partMeasures.length > measures.length) measures = partMeasures;
@@ -200,7 +212,7 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
   notes.sort((a, b) => a.onset - b.onset || a.midi - b.midi);
   const last = measures[measures.length - 1];
   const totalBeats = last ? last.onset + last.duration : 0;
-  return { title, bpm, notes, measures, totalBeats, tempos: cleanTempos(tempos) };
+  return { title, bpm, notes, measures, totalBeats, tempos: cleanTempos(tempos), measureQuarters: lastQuarters };
 }
 
 const BEAT_UNIT: Record<string, number> = { whole: 4, half: 2, quarter: 1, eighth: 0.5, '16th': 0.25, '32nd': 0.125 };
@@ -257,6 +269,22 @@ function fitVoices(
 }
 
 /** 페이지별 인식 결과를 이어 붙인다 (박 위치와 마디 번호를 이어서 센다). */
+/**
+ * 쪽마다 인식한 MusicXML 을 차례로 읽어 한 곡으로 잇는다. 빈 문자열(인식하지 못한 쪽)은 비워 둔다.
+ * 박자표는 앞 쪽에서 이어받는다.
+ */
+export function parsePages(xmls: string[], parser: XmlParser = new DOMParser()): ParsedScore {
+  let quarters: number | undefined;
+  return combinePages(
+    xmls.map((xml, i) => {
+      if (!xml) return emptyPage();
+      const page = parseMusicXML(xml, parser, i, { measureQuarters: quarters });
+      quarters = page.measureQuarters ?? quarters;
+      return page;
+    }),
+  );
+}
+
 /** 인식하지 못한 쪽 자리에 넣는 빈 쪽. */
 export function emptyPage(): ParsedScore {
   return { notes: [], measures: [], totalBeats: 0 };

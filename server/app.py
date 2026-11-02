@@ -8,6 +8,8 @@ Read Classic 악보 인식 서버.
 
 환경 변수
   HOMR_CMD         homr 실행 명령 (기본: "homr")
+  HOMR_WORKER_CMD  homr 를 켜 둔 채 쪽마다 일을 넘기는 작업자 명령 (예: "python -m server.homr_worker").
+                   있으면 쪽마다 프로그램을 새로 켜지 않아 빠르다. 작업자가 잘못되면 HOMR_CMD 로 한다.
   OMR_TIMEOUT      한 쪽 인식 제한 시간(초, 기본 600)
   OMR_CONCURRENCY  동시에 인식할 쪽 수 (기본 1; CPU 를 많이 쓴다)
   MAX_UPLOAD_MB    업로드 최대 크기 (기본 25)
@@ -18,7 +20,9 @@ Read Classic 악보 인식 서버.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import queue
 import shlex
 import subprocess
 import sys
@@ -37,6 +41,7 @@ from server.update import current as app_version
 from server.update import updater
 
 HOMR_CMD = shlex.split(os.environ.get("HOMR_CMD", "homr"))
+HOMR_WORKER_CMD = shlex.split(os.environ["HOMR_WORKER_CMD"]) if os.environ.get("HOMR_WORKER_CMD") else None
 OMR_TIMEOUT = float(os.environ.get("OMR_TIMEOUT", "600"))
 MAX_UPLOAD = int(float(os.environ.get("MAX_UPLOAD_MB", "25")) * 1024 * 1024)
 STATIC_DIR = Path(os.environ.get("STATIC_DIR", Path(__file__).resolve().parent.parent / "dist"))
@@ -80,6 +85,109 @@ def _homr_args() -> list[str]:
         if _supports("--no-title"):
             _EXTRA_ARGS.append("--no-title")  # 제목 글자 인식은 필요 없고 시간만 든다
     return _EXTRA_ARGS
+
+
+class WorkerError(RuntimeError):
+    pass
+
+
+class HomrWorker:
+    """homr 를 켜 둔 작업자 (server/homr_worker.py). 한 번에 한 쪽씩, 문제가 생기면 다시 켠다."""
+
+    MAX_JOBS = 30  # 이만큼 처리하면 새로 켠다 (메모리가 쌓이지 않게)
+
+    def __init__(self, cmd: list[str]) -> None:
+        self.cmd = cmd
+        self.proc: subprocess.Popen | None = None
+        self.lines: queue.Queue[str | None] = queue.Queue()
+        self.jobs = 0
+        self.lock = threading.Lock()
+
+    def _start(self) -> None:
+        self.close()
+        log_dir = os.environ.get("READ_CLASSIC_LOG_DIR") or tempfile.gettempdir()
+        log = open(Path(log_dir) / "homr-worker.log", "ab")  # noqa: SIM115 (작업자가 끝날 때까지 쓴다)
+        env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+        self.proc = subprocess.Popen(
+            self.cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=log, env=env, text=True, encoding="utf-8", bufsize=1
+        )
+        log.close()
+        self.lines = queue.Queue()
+        out = self.proc.stdout
+
+        def pump() -> None:
+            for line in out:  # type: ignore[union-attr]
+                self.lines.put(line)
+            self.lines.put(None)
+
+        threading.Thread(target=pump, daemon=True).start()
+        self._read(180)  # {"ready": true}
+        self.jobs = 0
+
+    def _read(self, timeout: float) -> dict:
+        try:
+            line = self.lines.get(timeout=timeout)
+        except queue.Empty:
+            self.close()
+            raise subprocess.TimeoutExpired(self.cmd, timeout) from None
+        if line is None:
+            self.close()
+            raise WorkerError("작업자가 멈췄습니다")
+        try:
+            return json.loads(line)
+        except ValueError:
+            self.close()
+            raise WorkerError(f"작업자 응답을 읽지 못했습니다: {line[:200]}") from None
+
+    def run(self, args: list[str], timeout: float) -> tuple[int, str]:
+        with self.lock:
+            if self.proc is None or self.proc.poll() is not None or self.jobs >= self.MAX_JOBS:
+                self._start()
+            assert self.proc and self.proc.stdin
+            try:
+                self.proc.stdin.write(json.dumps({"args": args}) + "\n")
+                self.proc.stdin.flush()
+            except OSError as e:
+                self.close()
+                raise WorkerError(f"작업자에게 보내지 못했습니다: {e}") from None
+            reply = self._read(timeout)
+            self.jobs += 1
+            return int(reply.get("code", 1)), str(reply.get("log", ""))
+
+    def close(self) -> None:
+        if self.proc and self.proc.poll() is None:
+            self.proc.kill()
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                pass
+        self.proc = None
+
+
+WORKER: HomrWorker | None = None
+
+
+def _worker() -> HomrWorker | None:
+    global WORKER
+    if WORKER is None and HOMR_WORKER_CMD:
+        WORKER = HomrWorker(HOMR_WORKER_CMD)
+    return WORKER
+
+
+def _recognise(args: list[str], cwd: str) -> tuple[int, str, bool]:
+    """homr 로 한 쪽 인식 → (종료 코드, 기록, 작업자로 했는지). 작업자가 잘못되면 쪽마다 새로 켜서 한다."""
+    worker = _worker()
+    if worker is not None:
+        try:
+            code, log = worker.run(args, OMR_TIMEOUT)
+            return code, log, True
+        except WorkerError as e:
+            print(f"[omr] 작업자 문제, 따로 실행합니다: {e}", file=sys.stderr, flush=True)
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+    proc = subprocess.run(
+        [*HOMR_CMD, *args], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=OMR_TIMEOUT, env=env
+    )
+    return proc.returncode, (proc.stdout or b"").decode("utf-8", "replace"), False
 
 
 def _read_staffs(path: Path) -> list[list[float]]:
@@ -187,27 +295,16 @@ async def omr(image: UploadFile) -> JSONResponse:
         async with _slots:
             _active += 1
             # 일반 스레드에서 실행: 운영체제/이벤트 루프 종류와 상관없이 동작 (Windows 포함)
-            env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
             try:
-                proc = await asyncio.to_thread(
-                    subprocess.run,
-                    [*HOMR_CMD, *_homr_args(), str(src)],
-                    cwd=tmp,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    timeout=OMR_TIMEOUT,
-                    env=env,
-                )
+                code, text, by_worker = await asyncio.to_thread(_recognise, [*_homr_args(), str(src)], tmp)
             except subprocess.TimeoutExpired:
                 raise HTTPException(504, "악보 인식 시간이 너무 오래 걸려 중단했습니다.") from None
             finally:
                 _active -= 1
-        out = proc.stdout
         result = src.with_suffix(".musicxml")
-        if proc.returncode != 0 or not result.exists():
-            text = (out or b"").decode("utf-8", "replace")
+        if code != 0 or not result.exists():
             # 원인을 찾을 수 있게 전체 기록을 남긴다 (노트북 앱은 기록 파일로 간다)
-            print(f"[omr] 인식 실패 (종료 코드 {proc.returncode})\n{text}", file=sys.stderr, flush=True)
+            print(f"[omr] 인식 실패 (종료 코드 {code})\n{text}", file=sys.stderr, flush=True)
             raise HTTPException(422, failure_message(text))
         xml = result.read_text(encoding="utf-8")
         staffs = _read_staffs(src.with_suffix(".txt"))
@@ -218,6 +315,7 @@ async def omr(image: UploadFile) -> JSONResponse:
             "engine": "homr",
             "version": _engine_version(),
             "seconds": round(time.monotonic() - started, 1),
+            "worker": by_worker,
         }
     )
 

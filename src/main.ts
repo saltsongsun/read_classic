@@ -7,9 +7,10 @@ import { ScoreFollower } from './follow/tracker';
 import type { ScoreEvent } from './follow/types';
 import { layoutEvents } from './score/imageLayout';
 import { ImageScoreView, type PageImage } from './score/imageView';
-import { checkServer, imageToPage, isImageOrPdf, isPdf, LAPTOP_APP, pdfToPages, recognizePage, type OmrPage } from './score/importImages';
+import { checkServer, imageToPage, isImageOrPdf, isPdf, LAPTOP_APP, pdfToPages, recognizePage, type ImportPage, type OmrPage } from './score/importImages';
+import { coveredStaves, defaultInclusion } from './score/pageAnalysis';
 import * as lib from './score/library';
-import { combinePages, emptyPage, eventsFromSteps, parseMusicXML, toSteps } from './score/musicxml';
+import { eventsFromSteps, parsePages, toSteps } from './score/musicxml';
 import { ScoreView } from './score/view';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -92,6 +93,9 @@ const el = {
   importFiles: $<HTMLInputElement>('importFiles'),
   importServer: $('importServer'),
   importProgress: $('importProgress'),
+  importSelect: $('importSelect'),
+  importSummary: $('importSummary'),
+  importRange: $<HTMLInputElement>('importRange'),
   importCancel: $<HTMLButtonElement>('importCancel'),
   importStart: $<HTMLButtonElement>('importStart'),
 };
@@ -285,12 +289,19 @@ async function addFiles(files: FileList | File[]): Promise<void> {
 }
 
 // ---------- 사진·PDF 악보 만들기 ----------
-let importList: PageImage[] = [];
+/** 가져오기 목록의 한 쪽: 인식할지, 인식 결과는 어땠는지 */
+interface ImportItem extends ImportPage {
+  include: boolean;
+  status?: 'ok' | 'partial' | 'failed';
+  note?: string;
+}
+let importList: ImportItem[] = [];
 let importThumbUrls: string[] = [];
 let importAbort: AbortController | null = null;
 
 function openImport(files: File[]): void {
   importList = [];
+  el.importRange.value = '';
   renderThumbs();
   el.importTitle.value = files[0] ? files[0].name.replace(/\.[^.]+$/, '') : '';
   el.importProgress.hidden = true;
@@ -306,9 +317,10 @@ async function addImportFiles(files: File[]): Promise<void> {
       if (isPdf(f)) {
         showImportProgress('PDF 를 쪽별로 나누는 중…');
         const pages = await pdfToPages(f, (d, n) => showImportProgress(`PDF 를 쪽별로 나누는 중… ${d}/${n}`));
-        importList.push(...pages);
+        importList.push(...pages.map((pg) => ({ ...pg, include: true })));
+        applyDefaultInclusion();
       } else {
-        importList.push(await imageToPage(f));
+        importList.push({ ...(await imageToPage(f)), include: true });
       }
       if (!el.importTitle.value) el.importTitle.value = f.name.replace(/\.[^.]+$/, '');
     } catch (e) {
@@ -319,23 +331,92 @@ async function addImportFiles(files: File[]): Promise<void> {
   el.importProgress.hidden = true;
 }
 
+/** 악보가 보이는 쪽만 고른다 (사진은 늘 넣는다). 쪽 범위를 적어 두었으면 그걸 따른다. */
+function applyDefaultInclusion(): void {
+  if (el.importRange.value.trim()) {
+    applyRange();
+    return;
+  }
+  const inc = defaultInclusion(importList.map((p) => p.analysis));
+  importList.forEach((p, i) => (p.include = inc[i]));
+}
+
+/** "3-10, 12" 같은 쪽 범위 → 그 쪽만 인식 */
+function applyRange(): void {
+  const text = el.importRange.value.trim();
+  if (!text) {
+    applyDefaultInclusion();
+    renderThumbs();
+    return;
+  }
+  const want = new Set<number>();
+  for (const part of text.split(/[,\s]+/).filter(Boolean)) {
+    const m = /^(\d+)(?:\s*[-~]\s*(\d+))?$/.exec(part);
+    if (!m) {
+      toast('쪽 범위는 "3-10, 12" 처럼 적어 주세요.');
+      return;
+    }
+    const a = Number(m[1]);
+    const b = m[2] ? Number(m[2]) : a;
+    for (let k = Math.min(a, b); k <= Math.max(a, b); k++) want.add(k);
+  }
+  importList.forEach((p, i) => (p.include = want.has(i + 1)));
+  renderThumbs();
+}
+
 function showImportProgress(text: string): void {
   el.importProgress.hidden = false;
   el.importProgress.textContent = text;
 }
 
+/** 몇 쪽을 인식할지, 뺀 쪽은 어떤 쪽인지 */
+function renderImportSummary(): void {
+  const pdfPages = importList.filter((p) => p.analysis).length;
+  el.importSelect.hidden = importList.length < 2 && pdfPages === 0;
+  const included = importList.filter((p) => p.include).length;
+  const left = importList.map((p, i) => (p.include ? 0 : i + 1)).filter(Boolean);
+  const list = left.length > 6 ? `${left.slice(0, 6).join(', ')} …` : left.join(', ');
+  let text = `${importList.length}쪽 중 ${included}쪽을 인식해요.`;
+  if (left.length) text += ` 뺀 쪽: ${list}쪽.`;
+  const auto = importList.some((p) => p.analysis && !p.analysis.music && !p.include);
+  if (auto && !el.importRange.value.trim()) text += ' 오선이 안 보이는 쪽(표지·머리말·해설)은 자동으로 뺐어요.';
+  text += ' 쪽 그림을 누르면 넣거나 뺄 수 있어요.';
+  el.importSummary.textContent = text;
+}
+
 function renderThumbs(): void {
   importThumbUrls.forEach((u) => URL.revokeObjectURL(u));
   importThumbUrls = [];
+  renderImportSummary();
   el.importPages.replaceChildren(
     ...importList.map((p, i) => {
       const li = document.createElement('li');
       li.className = 'thumb';
+      li.classList.toggle('excluded', !p.include);
+      if (p.status) li.classList.add(p.status);
+      const pick = document.createElement('button');
+      pick.type = 'button';
+      pick.className = 'thumb-pick';
+      pick.setAttribute('aria-pressed', String(p.include));
+      pick.setAttribute('aria-label', `${i + 1}쪽 ${p.include ? '인식에서 빼기' : '인식에 넣기'}`);
+      pick.title = p.include ? '눌러서 인식에서 빼기' : '눌러서 인식에 넣기';
+      pick.addEventListener('click', () => {
+        p.include = !p.include;
+        renderThumbs();
+      });
       const img = document.createElement('img');
       const url = URL.createObjectURL(p.blob);
       importThumbUrls.push(url);
       img.src = url;
       img.alt = `${i + 1}쪽`;
+      pick.append(img);
+      const badge = thumbBadge(p);
+      if (badge) {
+        const b = document.createElement('span');
+        b.className = 'thumb-badge';
+        b.textContent = badge;
+        pick.append(b);
+      }
       const tools = document.createElement('div');
       tools.className = 'thumb-tools';
       const label = document.createElement('span');
@@ -358,12 +439,22 @@ function renderThumbs(): void {
         label,
         mk('←', '앞으로', () => swap(i, i - 1), i === 0),
         mk('→', '뒤로', () => swap(i, i + 1), i === importList.length - 1),
-        mk('×', '빼기', () => importList.splice(i, 1)),
+        mk('×', '목록에서 지우기', () => importList.splice(i, 1)),
       );
-      li.append(img, tools);
+      li.append(pick, tools);
       return li;
     }),
   );
+}
+
+/** 쪽 그림 위에 붙는 짧은 표시 */
+function thumbBadge(p: ImportItem): string {
+  if (p.status === 'ok') return p.note ? `✓ ${p.note}` : '✓';
+  if (p.status === 'partial') return `⚠ ${p.note ?? ''}`.trim();
+  if (p.status === 'failed') return '✕ 못 읽음';
+  if (!p.include) return p.analysis && !p.analysis.music ? '악보 없음 · 뺌' : '뺌';
+  if (p.analysis?.music) return `오선 ${p.analysis.staves.length}개`;
+  return '';
 }
 
 async function refreshServerStatus(target: HTMLElement): Promise<boolean> {
@@ -377,48 +468,86 @@ async function refreshServerStatus(target: HTMLElement): Promise<boolean> {
 }
 
 async function startImport(): Promise<void> {
-  if (importList.length === 0) {
-    toast('악보 사진이나 PDF 를 먼저 넣어 주세요.');
+  const pages = importList.filter((p) => p.include);
+  if (pages.length === 0) {
+    toast(importList.length ? '인식할 쪽을 하나 이상 골라 주세요.' : '악보 사진이나 PDF 를 먼저 넣어 주세요.');
     return;
   }
   const title = el.importTitle.value.trim() || '사진 악보';
   if (!(await refreshServerStatus(el.importServer))) return;
   el.importStart.disabled = true;
   importAbort = new AbortController();
-  const total = importList.length;
+  const total = pages.length;
   const results: OmrPage[] = [];
-  const failed: Array<{ page: number; reason: string }> = [];
+  for (const p of importList) {
+    p.status = undefined;
+    p.note = undefined;
+  }
+  renderThumbs();
   const started = performance.now();
   try {
     for (let i = 0; i < total; i++) {
-      showImportProgress(`${i + 1}/${total}쪽 인식 중… ${importEta(started, i, total)}`);
+      const page = pages[i];
+      showImportProgress(`${i + 1}/${total}쪽 인식 중 (${importList.indexOf(page) + 1}쪽)… ${importEta(started, i, total)}`);
       try {
-        results.push(await recognizePage(prefs.omrServer, importList[i], importAbort.signal));
+        const r = await recognizePage(prefs.omrServer, page, importAbort.signal);
+        results.push(r);
+        judgePage(page, r);
       } catch (e) {
         const err = e as Error;
         // 취소했거나 인식 프로그램과 연결이 끊기면 멈추고, 한 쪽만 못 읽은 것이면 다음 쪽으로 넘어간다
         if (err.name === 'AbortError') throw err;
         if (err instanceof TypeError) throw new Error('악보 인식 프로그램과 연결이 끊겼어요. 앱을 다시 켜고 해 보세요.');
-        failed.push({ page: i + 1, reason: err.message });
+        page.status = 'failed';
+        page.note = err.message;
         results.push({ musicxml: '', staffs: [] });
       }
+      renderThumbs();
     }
     const notes = results.reduce((a, r) => a + (r.musicxml.match(/<pitch>/g)?.length ?? 0), 0);
+    const failed = pages.filter((p) => p.status === 'failed');
     if (notes === 0) {
-      throw new Error(failed.length ? failed[0].reason : '음표를 하나도 찾지 못했어요. 더 밝고 반듯하게 찍어 보세요.');
+      throw new Error(failed.length ? (failed[0].note ?? '') : '음표를 하나도 찾지 못했어요. 더 밝고 반듯하게 찍어 보세요.');
     }
-    const stored = await lib.addImageScore(title, importList, results);
+    // 쪽 번호는 창을 닫기 전에 (닫으면 목록이 비워진다)
+    const no = (list: ImportItem[]) => list.map((p) => importList.indexOf(p) + 1).join(', ');
+    const partial = pages.filter((p) => p.status === 'partial');
+    let msg = `'${title}' 악보를 저장했어요 (${total}쪽, 음표 ${notes}개).`;
+    if (failed.length) msg += ` ${no(failed)}쪽은 읽지 못했어요.`;
+    if (partial.length) msg += ` ${no(partial)}쪽은 일부 줄만 읽었어요.`;
+    if (failed.length || partial.length) msg += ' 그 부분은 흐른 시간으로 위치를 어림해요.';
+    const stored = await lib.addImageScore(title, pages, results);
     el.importDialog.close();
     await renderLibrary();
     await openScore(stored.id);
-    const skipped = failed.length ? ` ${failed.map((f) => f.page).join(', ')}쪽은 읽지 못해 건너뛰었어요.` : '';
-    toast(`'${title}' 악보를 저장했어요 (음표 ${notes}개 인식).${skipped}`);
+    toast(msg);
   } catch (e) {
     if ((e as Error).name !== 'AbortError') showImportProgress(`인식하지 못했어요: ${(e as Error).message}`);
   } finally {
     el.importStart.disabled = false;
     importAbort = null;
   }
+}
+
+/** 찾아 둔 오선과 인식된 줄을 견줘서 쪽마다 결과를 매긴다. */
+function judgePage(page: ImportItem, r: OmrPage): void {
+  const notes = r.musicxml.match(/<pitch>/g)?.length ?? 0;
+  const staves = page.analysis?.staves ?? [];
+  if (notes === 0) {
+    page.status = 'failed';
+    page.note = '음표 없음';
+    return;
+  }
+  if (staves.length >= 2) {
+    const read = coveredStaves(staves, r.staffs);
+    if (read < staves.length) {
+      page.status = 'partial';
+      page.note = `오선 ${staves.length}개 중 ${read}개`;
+      return;
+    }
+  }
+  page.status = 'ok';
+  page.note = `음표 ${notes}개`;
 }
 
 /** 지금까지 걸린 시간으로 남은 인식 시간을 어림한다. */
@@ -498,8 +627,8 @@ async function showXml(content: string | Blob, title: string): Promise<LoadedSco
 async function showImages(stored: lib.StoredScore): Promise<LoadedScore> {
   const omr = stored.omr ?? [];
   const parser = new DOMParser();
-  // 인식하지 못한 쪽은 비워 둔다 (그 쪽은 건너뛰고 따라간다)
-  const score = combinePages(omr.map((p, i) => (p.musicxml ? parseMusicXML(p.musicxml, parser, i) : emptyPage())));
+  // 인식하지 못한 쪽은 비워 두고 (그 쪽은 시간으로 어림하며 따라간다), 박자표는 앞 쪽에서 이어받는다
+  const score = parsePages(omr.map((p) => p.musicxml), parser);
   const steps = toSteps(score);
   const events = eventsFromSteps(steps, score.totalBeats, score.tempos);
   if (events.length === 0) throw new Error('인식된 음표가 없어요.');
@@ -867,6 +996,7 @@ el.importDialog.addEventListener('drop', (e) => {
   if (e.dataTransfer?.files.length) void addImportFiles(Array.from(e.dataTransfer.files).filter(isImageOrPdf));
 });
 el.importStart.addEventListener('click', () => void startImport());
+el.importRange.addEventListener('change', applyRange);
 el.importCancel.addEventListener('click', () => {
   importAbort?.abort();
   el.importDialog.close();

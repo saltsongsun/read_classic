@@ -1,6 +1,6 @@
 import { DOMParser } from '@xmldom/xmldom';
 import { describe, expect, test } from 'vitest';
-import { combinePages, emptyPage, eventsFromSteps, parseMusicXML, toSteps, type XmlParser } from '../src/score/musicxml';
+import { combinePages, emptyPage, eventsFromSteps, parsePages, parseMusicXML, toSteps, type XmlParser } from '../src/score/musicxml';
 // @ts-expect-error -- 순수 JS 모듈
 import { SCORES, toMusicXML, toRawNotes } from '../samples/scores.mjs';
 import { notesToEvents } from './harness';
@@ -116,6 +116,20 @@ describe('parseMusicXML', () => {
     ]);
     const events = eventsFromSteps(toSteps(parsed), parsed.totalBeats, parsed.tempos);
     expect(events.map((e) => e.bpm)).toEqual([50, 50, 120, 120]);
+  });
+
+  test('later pages keep the time signature of the first page', () => {
+    const note = (d: number) => `<note><pitch><step>C</step><octave>4</octave></pitch><duration>${d}</duration><voice>1</voice></note>`;
+    const page = (first: boolean, extra: number) =>
+      `<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"/></part-list><part id="P1">` +
+      `<measure number="1"><attributes><divisions>1</divisions>${first ? '<time><beats>3</beats><beat-type>4</beat-type></time>' : ''}</attributes>${note(3 + extra)}</measure>` +
+      `<measure number="2">${note(3)}</measure></part></score-partwise>`;
+    // 둘째 쪽 첫 마디가 인식 오류로 4박이 됐다: 3/4 를 이어받아 3박으로 줄여야 한다
+    const both = parsePages([page(true, 0), page(false, 1)], parser);
+    expect(both.measures.map((m) => m.duration)).toEqual([3, 3, 3, 3]);
+    expect(both.totalBeats).toBe(12);
+    // 이어받지 않으면 (예전) 4/4 로 보고 4박 그대로
+    expect(parseMusicXML(page(false, 1), parser).measures[0].duration).toBe(4);
   });
 
   test('rejects broken input', () => {

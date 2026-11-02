@@ -6,7 +6,8 @@ Read Classic 노트북용 실행 프로그램.
 설치가 끝난 뒤에는 인터넷이 없어도 사진·PDF 악보 인식부터 연주 따라가기까지 모두 된다.
 
   read-classic            서버 실행 + 브라우저 열기 (이미 켜져 있으면 브라우저만 연다)
-  read-classic --homr …   (내부용) 악보 인식 엔진 homr 를 실행한다. 서버가 쪽마다 이 모드로 자신을 부른다.
+  read-classic --homr-worker   (내부용) homr 를 켜 둔 채 서버가 넘기는 쪽을 차례로 인식한다 (빠름).
+  read-classic --homr …   (내부용) 악보 인식 엔진 homr 를 한 번 실행한다. 작업자가 잘못되면 서버가 이걸 쓴다.
   read-classic --diag     (시험용) 글자 인코딩 설정 등을 JSON 으로 보여 준다.
   read-classic --after-update   업데이트 설치가 끝난 뒤 설치 프로그램이 부른다.
                           열려 있던 앱 화면이 다시 연결되면 브라우저 탭을 새로 열지 않는다.
@@ -258,8 +259,11 @@ def serve(args: list[str]) -> None:
     # 악보 한 쪽마다 이 프로그램을 "--homr" 모드로 따로 실행 (끝나면 메모리를 돌려준다)
     if FROZEN:
         server_app.HOMR_CMD = [sys.executable, "--homr"]
+        server_app.HOMR_WORKER_CMD = [sys.executable, "--homr-worker"]
     else:
         server_app.HOMR_CMD = [sys.executable, str(Path(__file__).resolve()), "--homr"]
+        server_app.HOMR_WORKER_CMD = [sys.executable, str(Path(__file__).resolve()), "--homr-worker"]
+    os.environ["READ_CLASSIC_LOG_DIR"] = str(log_dir())
 
     url = f"http://localhost:{port}"
     threading.Thread(target=wait_and_open, args=(url, port, open_browser, after_update), daemon=True).start()
@@ -283,6 +287,14 @@ def main() -> None:
             sys.stdout.flush()
             sys.stderr.flush()
             sys.exit(1)
+        return
+    if args and args[0] == "--homr-worker":
+        setup_output("homr.log")
+        force_utf8_text_files()
+        allow_unicode_image_paths()
+        from server.homr_worker import serve as serve_worker
+
+        serve_worker()
         return
     if args and args[0] == "--diag":
         setup_output("read-classic.log")

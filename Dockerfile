@@ -19,5 +19,7 @@ RUN pip install --no-cache-dir -r server/requirements.txt && homr --init
 COPY server/ server/
 COPY --from=web /app/dist dist
 ENV STATIC_DIR=/srv/dist
+# homr 를 켜 둔 채 쪽마다 일을 넘긴다 (쪽마다 새로 켜는 것보다 빠름)
+ENV HOMR_WORKER_CMD="python -m server.homr_worker"
 EXPOSE 8000
 CMD ["uvicorn", "server.app:app", "--host", "0.0.0.0", "--port", "8000"]

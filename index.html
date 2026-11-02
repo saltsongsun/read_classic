@@ -190,6 +190,10 @@
           <h2 id="importHeading">사진·PDF 악보 만들기</h2>
           <label class="field">곡 제목 <input type="text" id="importTitle" placeholder="예: 쇼팽 녹턴 Op.9-2" /></label>
           <p class="import-hint">쪽 순서대로 넣어 주세요. 사진은 악보 한 쪽이 화면에 꽉 차게, 밝은 곳에서 똑바로 찍으면 가장 잘 읽혀요.</p>
+          <div class="import-select" id="importSelect" hidden>
+            <p class="import-summary" id="importSummary"></p>
+            <label class="field">인식할 쪽 <input type="text" id="importRange" inputmode="numeric" placeholder="예: 3-10, 12 · 비우면 악보가 있는 쪽 모두" /></label>
+          </div>
           <ol class="thumbs" id="importPages"></ol>
           <div class="import-add">
             <label class="btn"><input type="file" accept="image/*" capture="environment" id="importCamera" /><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" /></svg>쪽 찍기</label>

@@ -2,6 +2,12 @@
  * 사진·이미지·PDF 악보를 쪽별 JPEG 로 바꾸고, 악보 인식 서버에 보내 MusicXML 을 받는다.
  */
 import type { PageImage } from './imageView';
+import { analyzeCanvas, type PageAnalysis } from './pageAnalysis';
+
+/** 가져오기 중인 쪽: 그림 + (PDF 쪽이면) 오선 분석 */
+export interface ImportPage extends PageImage {
+  analysis?: PageAnalysis;
+}
 
 export interface OmrPage {
   musicxml: string;
@@ -46,13 +52,13 @@ export async function imageToPage(file: Blob): Promise<PageImage> {
 }
 
 /** PDF → 쪽별 JPEG (가로 약 2000px) */
-export async function pdfToPages(file: Blob, onPage?: (done: number, total: number) => void): Promise<PageImage[]> {
+export async function pdfToPages(file: Blob, onPage?: (done: number, total: number) => void): Promise<ImportPage[]> {
   const pdfjs = await import('pdfjs-dist');
   const worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
   pdfjs.GlobalWorkerOptions.workerSrc = worker;
   const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
   const doc = await task.promise;
-  const pages: PageImage[] = [];
+  const pages: ImportPage[] = [];
   try {
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
@@ -65,7 +71,14 @@ export async function pdfToPages(file: Blob, onPage?: (done: number, total: numb
       ctx.fillStyle = '#fff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvas, canvasContext: ctx, viewport }).promise;
-      pages.push({ blob: await canvasToJpeg(canvas), width: canvas.width, height: canvas.height });
+      // 오선이 있는 쪽인지 살펴 둔다 (표지·머리말·해설 쪽은 인식하지 않게)
+      let analysis: PageAnalysis | undefined;
+      try {
+        analysis = analyzeCanvas(canvas);
+      } catch {
+        analysis = undefined;
+      }
+      pages.push({ blob: await canvasToJpeg(canvas), width: canvas.width, height: canvas.height, analysis });
       page.cleanup();
       onPage?.(i, doc.numPages);
     }

@@ -1238,7 +1238,21 @@ kbd {
   font-weight: var(--fw-medium);
   color: var(--ink-2);
 }
+.thumb-pick {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.thumb-pick:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
+}
 .thumb img {
+  display: block;
   width: 100%;
   aspect-ratio: 3 / 4;
   object-fit: cover;
@@ -1246,6 +1260,49 @@ kbd {
   border: 1px solid var(--line);
   background: #fff;
   box-shadow: var(--shadow-sm);
+  transition: opacity 0.2s var(--ease), filter 0.2s var(--ease);
+}
+/* 인식하지 않을 쪽: 흐리게 */
+.thumb.excluded img {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+.thumb.excluded .thumb-tools span {
+  color: var(--ink-3);
+  text-decoration: line-through;
+}
+.thumb-badge {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 6px;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chrome) 82%, transparent);
+  color: var(--on-dark);
+  font-size: 10.5px;
+  font-weight: var(--fw-semibold);
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.thumb.ok .thumb-badge {
+  background: color-mix(in srgb, var(--gold) 92%, black);
+}
+.thumb.partial .thumb-badge,
+.thumb.failed .thumb-badge {
+  background: var(--wine);
+}
+.import-select {
+  display: grid;
+  gap: 8px;
+}
+.import-summary {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
 }
 .thumb-tools {
   display: flex;
