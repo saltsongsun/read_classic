@@ -32,6 +32,20 @@ export interface TrackerOptions {
    * 단위 안에서의 음 위치는 시간으로 나눠 표시한다. 홀 잔향·페달로 빠른 음들이 뭉개질 때 강하다.
    */
   minUnitSec?: number;
+  /**
+   * 지나간 곳으로 돌아갈지.
+   * - 'repeats' (기본, 콩쿠르): 앞으로만 간다. 단, 도돌이표(repeats)에서 연주자가 실제로 반복하면
+   *   그 구간의 시작으로 한 번 돌아간다. 반복을 건너뛰면 그대로 앞으로 간다.
+   * - 'free' (연습): 앞 구절로 돌아가 다시 치면 어디든 따라간다.
+   */
+  backward?: 'repeats' | 'free';
+  /** 도돌이표: from(반복 구간 마지막 이벤트)에서 to(구간 첫 이벤트)로 돌아갈 수 있다 */
+  repeats?: RepeatJump[];
+}
+
+export interface RepeatJump {
+  from: number;
+  to: number;
 }
 
 /** 추적 단위: 연속된 악보 이벤트 [first, last] */
@@ -98,6 +112,13 @@ const RELOC_TAU_BACK = 24; // 시작 위치 사전확률의 감쇠 (이벤트 �
 const RELOC_TAU_FWD = 3; // 앞으로 건너뛰는 일은 드물다
 const RELOC_CONFIRM = 2; // 같은 결론이 몇 번 연속 나와야 옮길지
 const RELOC_MIN_SIM = 0.72; // 옮겨 갈 곳의 평균 유사도 하한
+// 도돌이표로 돌아가기: 반복 구간 끝 근처에 있을 때만 구간 시작 주변을 찾아본다
+const REPEAT_AFTER = 16; // 구간 끝을 지나 이만큼까지 (돌아간 걸 알아채는 사이 앞으로 흘러가 있을 수 있다)
+const REPEAT_SPAN = 24; // 구간 시작에서 이만큼까지 찾아본다
+const REPEAT_MIN_SEC = 0.8; // 구간 끝에 닿은 뒤 이만큼은 들어 봐야 판단한다
+const REPEAT_LISTEN_SEC = 1.0; // 판단에 쓰는 최근 소리 길이
+const REPEAT_MARGIN = 8; // 도돌이표로 돌아갈 때 필요한 증거 (nats). 갈 곳이 정해져 있어 일반 재탐색보다 덜 엄격하다
+const LOCAL_BACK = 8; // 콩쿠르 모드에서도 이 정도(음 몇 개, 한두 박)는 되돌려 바로잡는다 (추적기가 먼저 나간 경우)
 // 시간 힌트 (위치를 놓쳤을 때 흐른 시간으로 어림한 위치): 그 주변도 찾아본다
 const HINT_SPAN = 24; // 힌트 앞뒤로 몇 단위까지
 const HINT_TAU = 8; // 힌트 주변 사전확률의 감쇠
@@ -224,6 +245,8 @@ export class ScoreFollower {
   private next: Belief;
   private altCur: Belief;
   private altNext: Belief;
+  private spareCur: Belief; // 도돌이표 후보를 따로 풀어 볼 때
+  private spareNext: Belief;
 
   private readonly hopSec: number;
   private scoreBpm: number;
@@ -244,6 +267,11 @@ export class ScoreFollower {
   private relocCandidate = -1;
   private relocVotes = 0;
   private hintUnit = -1;
+  private readonly backward: 'repeats' | 'free';
+  private readonly repeatUnits: Array<{ from: number; to: number; used: boolean; reachedAt: number }>;
+  private frameNo = 0; // 소리 난 프레임 수
+  private repeatNow = -1; // 이번 재탐색에서 고른 도돌이표
+  private jumpedBack = false; // 방금 도돌이표로 돌아갔다
 
   constructor(events: ScoreEvent[], opts: TrackerOptions) {
     if (events.length === 0) throw new Error('악보에 음표가 없습니다.');
@@ -257,6 +285,10 @@ export class ScoreFollower {
     this.sharpness = opts.sharpness ?? 9;
     this.adaptTempo = opts.adaptTempo ?? true;
     this.historyLen = Math.max(10, Math.round(RELOC_WINDOW_SEC / this.hopSec));
+    this.backward = opts.backward ?? 'repeats';
+    this.repeatUnits = (opts.repeats ?? [])
+      .filter((r) => r.to < r.from && r.from < events.length)
+      .map((r) => ({ from: this.unitOf(r.from), to: this.unitOf(r.to), used: false, reachedAt: -1 }));
 
     this.tmplS = unitEvents.map(chromaTemplate);
     this.tmplWet = RING.gain > 0 ? ringingTemplates(unitEvents) : null;
@@ -281,6 +313,8 @@ export class ScoreFollower {
     this.next = new Belief(n);
     this.altCur = new Belief(n);
     this.altNext = new Belief(n);
+    this.spareCur = new Belief(n);
+    this.spareNext = new Belief(n);
     this.reset();
   }
 
@@ -339,6 +373,10 @@ export class ScoreFollower {
     this.bpm = this.scoreBpm;
     this.history.length = 0;
     this.sinceReloc = 0;
+    for (const r of this.repeatUnits) {
+      r.used = false;
+      r.reachedAt = -1;
+    }
     this.updateExpected();
   }
 
@@ -399,11 +437,16 @@ export class ScoreFollower {
       this.relocalize();
     }
 
-    const { best, bestP } = this.argmax(this.cur, 0, this.n - 1);
+    let { best, bestP } = this.argmax(this.cur, 0, this.n - 1);
+    // 앞으로만 가는 모드: 확률이 잠깐 앞 음으로 쏠려도 표시 위치는 되돌리지 않는다 (도돌이표 이동은 relocalize 에서)
+    if (this.backward !== 'free' && best >= 0 && best < this.current - LOCAL_BACK && !this.jumpedBack) best = this.current;
+    this.jumpedBack = false;
     if (best !== this.current) {
       this.onAdvance(this.current, best);
       this.current = best;
     }
+    this.frameNo++;
+    for (const r of this.repeatUnits) if (!r.used && r.reachedAt < 0 && best >= r.from - 1) r.reachedAt = this.frameNo;
     this.currentEvent = best < 0 ? -1 : this.eventInUnit(best);
     this.confidence = bestP;
     return { index: this.currentEvent, confidence: bestP, bpm: this.bpm, voiced: true };
@@ -513,6 +556,55 @@ export class ScoreFollower {
   }
 
   /**
+   * 최근 연주(history)를 [lo, hi] 안 아무 데서나 시작할 수 있는 모델로 다시 푼다 (altCur/altNext 사용).
+   * 숫자 문제로 풀 수 없으면 null.
+   */
+  private searchWindow(
+    lo: number,
+    hi: number,
+    prior: (j: number) => number,
+    start = 0,
+  ): { lo: number; hi: number; altLL: number; mainLL: number; b: Belief; frames: number } | null {
+    let b = this.altCur;
+    let nb = this.altNext;
+    b.clear();
+    nb.clear();
+    let z = 0;
+    for (let j = lo; j <= hi; j++) {
+      const w = prior(j);
+      b.a[j] = w;
+      b.s[j] = w;
+      z += 2 * w;
+    }
+    if (!(z > 0)) return null;
+    for (let j = lo; j <= hi; j++) {
+      b.a[j] /= z;
+      b.s[j] /= z;
+    }
+    let altLL = 0;
+    let mainLL = 0;
+    const frame: AudioFrame = { time: 0, rms: 0, tonalness: 1, flatness: 0, chroma: new Float64Array(12), attack: new Float64Array(12), onset: 0 };
+    for (let i = start; i < this.history.length; i++) {
+      const h = this.history[i];
+      frame.chroma = h.chroma;
+      frame.attack = h.attack;
+      frame.onset = h.onset;
+      let tot: number;
+      if (i === start) tot = this.observe(b, frame, lo, hi);
+      else {
+        tot = this.step(b, nb, frame, lo, hi);
+        [b, nb] = [nb, b];
+      }
+      if (!(tot > 0)) return null;
+      altLL += Math.log(tot);
+      mainLL += h.logLik;
+    }
+    this.altCur = b;
+    this.altNext = nb;
+    return { lo, hi, altLL, mainLL, b, frames: this.history.length - start };
+  }
+
+  /**
    * 최근 연주를 "현재 위치 주변 아무 데서나 시작"하는 모델로 다시 풀어서,
    * 지금 경로보다 훨씬 그럴듯하면 그쪽으로 옮긴다.
    */
@@ -520,8 +612,11 @@ export class ScoreFollower {
     // 마지막 음에 도달했으면 곡이 끝난 것: 뒤따르는 박수·잡음으로 위치를 바꾸지 않는다
     if (this.current >= this.n - 1) return;
     const center = Math.max(0, this.current);
-    let lo = Math.max(0, center - RELOC_BACK);
+    const free = this.backward === 'free';
+    // 찾아볼 범위: 연습 모드는 앞뒤로, 콩쿠르 모드는 지금 위치부터 앞으로만
+    let lo = Math.max(0, center - (free ? RELOC_BACK : LOCAL_BACK));
     let hi = Math.min(this.n - 1, center + RELOC_FWD);
+    // 시간 힌트는 앞이든 뒤든 쓴다. 뒤쪽 힌트는 추적기가 연주보다 앞질러 갔을 때다 (연주자는 그만큼 빨리 갈 수 없다)
     const hint = this.hintUnit;
     if (hint >= 0) {
       lo = Math.max(0, Math.min(lo, hint - HINT_SPAN));
@@ -532,55 +627,54 @@ export class ScoreFollower {
         hi = Math.min(this.n - 1, hint + HINT_SPAN);
       }
     }
-    let b = this.altCur;
-    let nb = this.altNext;
-    b.clear();
-    nb.clear();
-    // 시작 위치 사전확률: 지금 위치에 가까울수록 높게 (뒤로 돌아가는 연습이 앞으로 건너뛰기보다 흔하다).
-    // 같은 선율이 여러 번 나오는 곡에서 멀리 있는 똑같은 구간으로 건너뛰지 않게 해 준다.
-    let z = 0;
-    for (let j = lo; j <= hi; j++) {
-      const d = j - (center);
-      let w = Math.exp(d < 0 ? d / RELOC_TAU_BACK : -d / RELOC_TAU_FWD);
+    const prior = (j: number): number => {
+      const d = j - center;
+      let w = d < -LOCAL_BACK && !free ? 0 : Math.exp(d < 0 ? d / RELOC_TAU_BACK : -d / RELOC_TAU_FWD);
       if (hint >= 0) w += Math.exp(-Math.abs(j - hint) / HINT_TAU);
-      b.a[j] = w;
-      b.s[j] = w;
-      z += 2 * w;
+      return w;
+    };
+    let result = this.searchWindow(lo, hi, prior);
+    if (!result) return;
+    this.repeatNow = -1;
+    // 도돌이표: 반복 구간 끝에 닿은 뒤 들린 소리만으로, 구간 시작으로 돌아가 다시 치는지 본다 (구간마다 한 번).
+    // 끝에 닿기 전 소리까지 섞으면 구간 시작과 맞지 않아 알아채지 못한다.
+    let repeatOk = false;
+    if (!free) {
+      const minFrames = Math.round(REPEAT_MIN_SEC / this.hopSec);
+      this.repeatUnits.forEach((r, k) => {
+        if (repeatOk || r.used || r.reachedAt < 0 || center > r.from + REPEAT_AFTER) return;
+        const since = this.frameNo - r.reachedAt;
+        if (since < minFrames) return;
+        // 가장 최근 소리만 (구간 끝 음을 오래 누르고 있다가 돌아가는 일이 많아서)
+        const start = Math.max(0, this.history.length - Math.min(since, Math.round(REPEAT_LISTEN_SEC / this.hopSec)));
+        const rlo = Math.max(0, r.to - 2);
+        const rhi = Math.min(this.n - 1, r.to + REPEAT_SPAN, r.from);
+        const keep = result!;
+        [this.altCur, this.altNext, this.spareCur, this.spareNext] = [this.spareCur, this.spareNext, this.altCur, this.altNext];
+        const alt = this.searchWindow(rlo, rhi, (j) => Math.exp(-Math.abs(j - r.to) / 4), start);
+        const frames = this.history.length - start;
+        if (alt && alt.altLL - alt.mainLL >= REPEAT_MARGIN && alt.altLL / frames >= this.sharpness * (RELOC_MIN_SIM - 1)) {
+          result = alt;
+          this.repeatNow = k;
+          repeatOk = true;
+        } else {
+          [this.altCur, this.altNext, this.spareCur, this.spareNext] = [this.spareCur, this.spareNext, this.altCur, this.altNext];
+          result = keep;
+        }
+      });
     }
-    for (let j = lo; j <= hi; j++) {
-      b.a[j] /= z;
-      b.s[j] /= z;
-    }
-    let altLL = 0;
-    let mainLL = 0;
-    const frame: AudioFrame = { time: 0, rms: 0, tonalness: 1, flatness: 0, chroma: new Float64Array(12), attack: new Float64Array(12), onset: 0 };
-    for (let i = 0; i < this.history.length; i++) {
-      const h = this.history[i];
-      frame.chroma = h.chroma;
-      frame.attack = h.attack;
-      frame.onset = h.onset;
-      let tot: number;
-      if (i === 0) tot = this.observe(b, frame, lo, hi);
-      else {
-        tot = this.step(b, nb, frame, lo, hi);
-        [b, nb] = [nb, b];
-      }
-      if (!(tot > 0)) return;
-      altLL += Math.log(tot);
-      mainLL += h.logLik;
-    }
-    this.altCur = b;
-    this.altNext = nb;
+    ({ lo, hi } = result);
+    const { altLL, mainLL, b, frames } = result;
     // 옮겨 갈 곳이 "덜 나쁜" 정도가 아니라 실제로 잘 맞아야 한다 (잡음·박수 속에서 헤매지 않게)
     const altFit = altLL / this.history.length;
-    if (altLL - mainLL < RELOC_MARGIN || altFit < this.sharpness * (RELOC_MIN_SIM - 1)) {
+    if (!repeatOk && (altLL - mainLL < RELOC_MARGIN || altFit < this.sharpness * (RELOC_MIN_SIM - 1))) {
       this.relocVotes = 0;
       return;
     }
 
-    // 확률이 비슷한 후보가 여럿이면 (같은 선율 반복) 지금 위치에서 (놓쳤으면 시간 힌트에서) 가까운 쪽을 고른다
+    // 확률이 비슷한 후보가 여럿이면 (같은 선율 반복) 지금 위치에서 (놓쳤으면 시간 힌트에서, 도돌이표면 구간 시작에서) 가까운 쪽을 고른다
     const { bestP } = this.argmax(b, lo, hi);
-    const ref = hint >= 0 ? hint : center;
+    const ref = this.repeatNow >= 0 ? this.repeatUnits[this.repeatNow].to : hint >= 0 ? hint : center;
     let best = -1;
     for (let j = lo; j <= hi; j++) {
       const p = b.a[j] + b.s[j];
@@ -598,6 +692,14 @@ export class ScoreFollower {
     }
     if (this.relocVotes < RELOC_CONFIRM) return;
     this.relocVotes = 0;
+    if (!free && best < this.current - LOCAL_BACK) {
+      // 콩쿠르 모드에서 멀리 뒤로 가는 건 두 경우뿐:
+      // 도돌이표에서 실제로 반복할 때, 그리고 추적기가 앞질러 가서 흐른 시간이 가리키는 곳으로 바로잡을 때
+      const toHint = hint >= 0 && hint < this.current && Math.abs(best - hint) <= HINT_SPAN;
+      if (this.repeatNow < 0 && !toHint) return;
+      if (this.repeatNow >= 0) this.repeatUnits[this.repeatNow].used = true;
+      this.jumpedBack = true;
+    }
     // 재탐색 결과 중 고른 위치 주변만 주 추적기 분포로 채택 (다른 후보로 다시 튀지 않게)
     this.cur.clear();
     let mass = 0;
@@ -614,7 +716,7 @@ export class ScoreFollower {
       }
     }
     // 같은 평가가 반복되지 않도록 기록의 우도를 새 경로 기준으로 맞춘다
-    const share = altLL / this.history.length;
+    const share = altLL / Math.max(1, frames);
     for (const h of this.history) h.logLik = share;
     this.enteredAt = this.voicedTime;
   }

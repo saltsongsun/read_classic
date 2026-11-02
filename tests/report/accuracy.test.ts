@@ -32,8 +32,8 @@ test('연습 상황', () => {
   const ode = loadSample('ode-to-joy');
   const all = playSegments(ode, [[0, 64]]);
   show('3초 멈춤', run(ode, { timbre: 'piano', pauses: [[16, 3]], tempoWobble: 0.05, seed: 2 }));
-  show('6마디 치다가 처음부터', run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 24], [0, 64]]), tempoWobble: 0.05, seed: 2 }), false);
-  show('10마디 치다가 9마디로', run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 40], [32, 64]]), tempoWobble: 0.05, seed: 2 }), false);
+  show('6마디 치다가 처음부터 (연습 모드)', run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 24], [0, 64]]), tempoWobble: 0.05, seed: 2, backward: 'free' }), false);
+  show('10마디 치다가 9마디로 (연습 모드)', run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 40], [32, 64]]), tempoWobble: 0.05, seed: 2, backward: 'free' }), false);
   show('틀린 음 10%', run(ode, { timbre: 'piano', play: withWrongNotes(all, 0.1), tempoWobble: 0.05, seed: 2 }), false);
   const m9 = ode.events.findIndex((e) => e.measure === 9);
   show('9마디부터 (위치 지정)', run(ode, { timbre: 'piano', play: playSegments(ode, [[32, 64]]), startAt: m9, tempoWobble: 0.05, seed: 2 }), false);

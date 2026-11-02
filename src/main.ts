@@ -3,14 +3,14 @@ import './styles.css';
 import { FeatureExtractor, LevelGate, type AudioFrame } from './audio/features';
 import { startMic, type MicHandle } from './audio/mic';
 import { formatDuration, ProgressEstimator, type ProgressOptions, type ProgressSnapshot } from './follow/progress';
-import { ScoreFollower } from './follow/tracker';
+import { ScoreFollower, type RepeatJump } from './follow/tracker';
 import type { ScoreEvent } from './follow/types';
 import { layoutEvents } from './score/imageLayout';
 import { ImageScoreView, type PageImage } from './score/imageView';
 import { checkServer, imageToPage, isImageOrPdf, isPdf, LAPTOP_APP, pdfToPages, recognizePage, type ImportPage, type OmrPage } from './score/importImages';
 import { coveredStaves, defaultInclusion } from './score/pageAnalysis';
 import * as lib from './score/library';
-import { eventsFromSteps, parsePages, toSteps } from './score/musicxml';
+import { eventsFromSteps, parsePages, repeatJumps, toSteps } from './score/musicxml';
 import { ScoreView } from './score/view';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -65,6 +65,7 @@ const el = {
   omrServer: $<HTMLInputElement>('omrServer'),
   omrServerStatus: $('omrServerStatus'),
   showTicks: $<HTMLInputElement>('showTicks'),
+  practice: $<HTMLInputElement>('practice'),
   autoScroll: $<HTMLInputElement>('autoScroll'),
   toast: $('toast'),
   getApp: $('getApp'),
@@ -110,6 +111,8 @@ interface GlobalPrefs {
   alertSec: number;
   omrServer: string;
   showTicks: boolean;
+  /** 연습 모드: 앞 구절로 돌아가 다시 치면 따라간다 (끄면 지나간 곳으로 돌아가지 않음, 도돌이표만 예외) */
+  practice: boolean;
   /** 사진 악보 확대 비율 (MusicXML 악보와 따로) */
   imageZoom: number;
 }
@@ -122,6 +125,7 @@ const prefs: GlobalPrefs = lib.loadPrefs<GlobalPrefs>('global', {
   alertSec: 30,
   omrServer: '',
   showTicks: false,
+  practice: false,
   imageZoom: 1,
 });
 const savePrefs = () => lib.savePrefs('global', prefs);
@@ -146,6 +150,8 @@ interface LoadedScore {
   events: ScoreEvent[];
   bpm: number;
   kind: 'xml' | 'image';
+  /** 도돌이표 (사진 악보: 펼치지 않은 반복 구간) */
+  repeats?: RepeatJump[];
 }
 
 // ---------- 상태 ----------
@@ -651,7 +657,7 @@ async function showImages(stored: lib.StoredScore): Promise<LoadedScore> {
   imageView.setZoom(prefs.imageZoom);
   imageView.setShowRecognized(prefs.showTicks);
   await imageView.load(pages, geo);
-  return { title: stored.title, events, bpm: score.bpm ?? 100, kind: 'image' };
+  return { title: stored.title, events, bpm: score.bpm ?? 100, kind: 'image', repeats: repeatJumps(score, events) };
 }
 
 function lastMeasure(): number {
@@ -676,7 +682,14 @@ function createFollower(): void {
   if (!loaded) return;
   const sampleRate = mic?.sampleRate ?? 48000;
   fx = new FeatureExtractor(sampleRate);
-  follower = new ScoreFollower(loaded.events, { hopSec: fx.hopSec, bpm: currentBpm(), sharpness: prefs.strictness });
+  follower = new ScoreFollower(loaded.events, {
+    hopSec: fx.hopSec,
+    bpm: currentBpm(),
+    sharpness: prefs.strictness,
+    // 콩쿠르: 지나간 곳으로 돌아가지 않는다 (도돌이표만 예외). 연습 모드: 어디로든 돌아가 따라간다
+    backward: prefs.practice ? 'free' : 'repeats',
+    repeats: loaded.repeats,
+  });
   if (position >= 0) follower.setPosition(position);
   progress = new ProgressEstimator(loaded.events, progressOptions());
   if (position >= 0) progress.jumpTo(position);
@@ -1083,6 +1096,7 @@ el.autoScroll.checked = prefs.autoScroll;
 el.alertSec.value = String(prefs.alertSec);
 el.omrServer.value = prefs.omrServer;
 el.showTicks.checked = prefs.showTicks;
+el.practice.checked = prefs.practice;
 syncSettingLabels();
 el.sensitivity.addEventListener('input', () => {
   prefs.sensitivity = Number(el.sensitivity.value);
@@ -1109,6 +1123,13 @@ el.omrServer.addEventListener('change', () => {
   prefs.omrServer = el.omrServer.value.trim();
   savePrefs();
   void refreshServerStatus(el.omrServerStatus);
+});
+el.practice.addEventListener('change', () => {
+  prefs.practice = el.practice.checked;
+  savePrefs();
+  // 추적기를 새 방식으로 다시 만든다 (지금 위치는 그대로)
+  if (loaded && !mic) createFollower();
+  else if (loaded) toast('듣기를 멈췄다가 다시 시작하면 적용돼요.');
 });
 el.showTicks.addEventListener('change', () => {
   prefs.showTicks = el.showTicks.checked;

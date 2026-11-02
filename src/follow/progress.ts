@@ -12,7 +12,8 @@ import type { ScoreEvent } from './types';
  *   각자 믿을 만한 정도에 따라 섞는다. 예상 연주 시간을 알려 주면 사전값을 더 오래 믿는다.
  *
  * 시간 검증: 추적 위치가 흐른 시간과 맞게 나아가는지 본다.
- * - 최근 몇 초 동안 소리는 계속 나는데 위치가 거의 나아가지 않았거나 뒤로 돌아갔으면
+ * - 최근 몇 초 동안 소리는 계속 나는데 위치가 거의 나아가지 않았거나 뒤로 돌아갔으면, 또는 연주자가 칠 수 없을 만큼
+ *   빨리 앞질러 갔으면
  *   (인식이 틀린 구간에서 멈추거나, 비슷한 앞 구절로 잘못 옮겨 간 경우) "위치를 놓친" 것으로 본다.
  *   그동안은 마지막으로 믿을 수 있던 지점부터 그때의 속도로 시간에 맞춰 위치를 어림하고,
  *   그 어림 위치를 추적기에 힌트로 줘서 제자리를 다시 찾게 한다.
@@ -72,6 +73,7 @@ const CHECK_AFTER_SEC = 15;
 const SAMPLE_SEC = 0.25; // 진행 기록 간격
 const LOST_WINDOW_SEC = 8; // 이만큼 동안 거의 못 나아가면 놓친 것
 const LOST_RATE = 0.3; // 예상 진행의 이 비율보다 덜 나아가면
+const AHEAD_RATE = 2.2; // 예상 진행의 이 배보다 더 나아가면 (추적기가 비슷한 뒷부분으로 앞질러 감)
 const BACK_WINDOW_SEC = 5; // 다시 찾았는지 볼 때
 const ACCEPT_STEADY_SEC = 25; // 어림 위치와 달라도 이만큼 고르게 나아가면 추적기를 믿는다
 
@@ -230,7 +232,9 @@ export class ProgressEstimator {
       }
       // 긴 음(늘임표 등)을 누르고 있는 중이면 멈춰 있는 게 당연하다
       const longNote = this.nom[this.position] * pace > 0.5 * LOST_WINDOW_SEC;
-      if (r < LOST_RATE && !longNote && this.position < last) {
+      // 멈췄거나 뒤로 갔거나, 연주자가 칠 수 없을 만큼 빨리 앞질러 갔으면 놓친 것
+      const tooFast = r > AHEAD_RATE && tracked - this.since(LOST_WINDOW_SEC)!.old.played > 6;
+      if (((r < LOST_RATE && !longNote) || tooFast) && this.position < last) {
         this.lost = true;
         if (!this.good) {
           const w = this.since(LOST_WINDOW_SEC)!;

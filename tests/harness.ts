@@ -67,6 +67,9 @@ export interface RunOptions extends Partial<SynthOptions> {
   expectedTotalSec?: number;
   /** 시간 검증의 위치 힌트를 추적기에 주지 않는다 (비교용) */
   noTimeHint?: boolean;
+  /** 지나간 곳으로 돌아갈지 (기본: 콩쿠르 = 도돌이표만) */
+  backward?: 'repeats' | 'free';
+  repeats?: Array<{ from: number; to: number }>;
 }
 
 export function run(score: SampleScore, opts: RunOptions): RunResult {
@@ -75,7 +78,12 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
   const { samples, timeOf, sampleRate } = synthesize(play, { bpm: score.bpm, ...opts } as SynthOptions);
   const fx = new FeatureExtractor(sampleRate);
   const gate = new LevelGate();
-  const tracker = new ScoreFollower(events, { hopSec: fx.hopSec, bpm: opts.trackerBpm ?? score.bpm });
+  const tracker = new ScoreFollower(events, {
+    hopSec: fx.hopSec,
+    bpm: opts.trackerBpm ?? score.bpm,
+    backward: opts.backward,
+    repeats: opts.repeats,
+  });
   if (opts.startAt !== undefined) tracker.setPosition(opts.startAt);
   const progress = new ProgressEstimator(events, { scoreBpm: opts.trackerBpm ?? score.bpm, expectedTotalSec: opts.expectedTotalSec });
   const lastPlayed = play.reduce((m, n) => Math.max(m, n.onset + n.duration), 0);

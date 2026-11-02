@@ -1,6 +1,6 @@
 import { DOMParser } from '@xmldom/xmldom';
 import { describe, expect, test } from 'vitest';
-import { combinePages, emptyPage, eventsFromSteps, parsePages, parseMusicXML, toSteps, type XmlParser } from '../src/score/musicxml';
+import { combinePages, emptyPage, eventsFromSteps, parsePages, repeatJumps, parseMusicXML, toSteps, type XmlParser } from '../src/score/musicxml';
 // @ts-expect-error -- 순수 JS 모듈
 import { SCORES, toMusicXML, toRawNotes } from '../samples/scores.mjs';
 import { notesToEvents } from './harness';
@@ -130,6 +130,30 @@ describe('parseMusicXML', () => {
     expect(both.totalBeats).toBe(12);
     // 이어받지 않으면 (예전) 4/4 로 보고 4박 그대로
     expect(parseMusicXML(page(false, 1), parser).measures[0].duration).toBe(4);
+  });
+
+  test('repeat barlines become places the follower may jump back to', () => {
+    const bar = (n: number, step: string, extra = '') =>
+      `<measure number="${n}">${n === 1 ? '<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>' : ''}` +
+      `<note><pitch><step>${step}</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice></note>${extra}</measure>`;
+    const end = '<barline location="right"><repeat direction="backward"/></barline>';
+    const start = '<barline location="left"><repeat direction="forward"/></barline>';
+    // |: 1 2 :| 3 |: 4 5 :|   (homr 는 끝 도돌이표만 내는 일이 많다: 그때는 앞 반복이 끝난 다음 마디부터)
+    const xml = `<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"/></part-list><part id="P1">
+      ${bar(1, 'C')}${bar(2, 'D', end)}${bar(3, 'E')}${bar(4, 'F').replace('<note>', start + '<note>')}${bar(5, 'G', end)}
+    </part></score-partwise>`;
+    const parsed = parseMusicXML(xml, parser);
+    const events = eventsFromSteps(toSteps(parsed), parsed.totalBeats);
+    expect(repeatJumps(parsed, events)).toEqual([
+      { from: 1, to: 0 },
+      { from: 4, to: 3 },
+    ]);
+    const noForward = xml.replace(start, '');
+    const p2 = parseMusicXML(noForward, parser);
+    expect(repeatJumps(p2, eventsFromSteps(toSteps(p2), p2.totalBeats))).toEqual([
+      { from: 1, to: 0 },
+      { from: 4, to: 2 },
+    ]);
   });
 
   test('rejects broken input', () => {

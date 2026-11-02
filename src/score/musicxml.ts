@@ -31,6 +31,10 @@ export interface ParsedMeasure {
   system: number;
   onset: number;
   duration: number;
+  /** 도돌이표 시작(|:)이 이 마디 앞에 있다 */
+  repeatStart?: boolean;
+  /** 도돌이표 끝(:|)이 이 마디 뒤에 있다 */
+  repeatEnd?: boolean;
 }
 
 export interface ParsedScore {
@@ -202,7 +206,13 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
         fitVoices(notes, measureNo, partIndex, start, measureQuarters, voiceEnds);
         len = measureQuarters;
       }
-      partMeasures.push({ index: measureNo, page, system, onset: start, duration: len });
+      const m: ParsedMeasure = { index: measureNo, page, system, onset: start, duration: len };
+      for (const bl of kids(measure, 'barline')) {
+        const dir = kid(bl, 'repeat')?.getAttribute('direction');
+        if (dir === 'forward') m.repeatStart = true;
+        if (dir === 'backward') m.repeatEnd = true;
+      }
+      partMeasures.push(m);
       if (partIndex === 0) lastQuarters = measureQuarters;
       measureStart = start + len;
     });
@@ -283,6 +293,25 @@ export function parsePages(xmls: string[], parser: XmlParser = new DOMParser()):
       return page;
     }),
   );
+}
+
+/**
+ * 도돌이표 → 추적기가 돌아갈 수 있는 곳 (이벤트 번호). 반복 구간 끝(:|) 마디의 마지막 이벤트에서
+ * 구간 시작(|: 가 있는 마디, 없으면 앞 반복 구간이 끝난 다음 마디, 그것도 없으면 곡 처음)으로.
+ * 사진 악보는 도돌이표를 펼치지 않으므로, 연주자가 반복하면 이걸로 따라가고 건너뛰면 그대로 앞으로 간다.
+ */
+export function repeatJumps(score: ParsedScore, events: ScoreEvent[]): Array<{ from: number; to: number }> {
+  const jumps: Array<{ from: number; to: number }> = [];
+  let start = score.measures[0]?.index ?? 1;
+  for (const m of score.measures) {
+    if (m.repeatStart) start = m.index;
+    if (!m.repeatEnd) continue;
+    const from = events.reduce((last, e, i) => (e.measure <= m.index ? i : last), -1);
+    const to = events.findIndex((e) => e.measure >= start);
+    if (from > to && to >= 0) jumps.push({ from, to });
+    start = m.index + 1;
+  }
+  return jumps;
 }
 
 /** 인식하지 못한 쪽 자리에 넣는 빈 쪽. */

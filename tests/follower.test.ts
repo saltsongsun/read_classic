@@ -122,14 +122,14 @@ describe('score following on synthesized performances', () => {
     expectTracked(r, 0.95, ode.events.length);
   });
 
-  test('going back two bars to practise again', () => {
-    const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 40], [32, 64]]), tempoWobble: 0.05, seed: 2 });
+  test('going back two bars to practise again (practice mode)', () => {
+    const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 40], [32, 64]]), tempoWobble: 0.05, seed: 2, backward: 'free' });
     // 콩쿠르용으로 위치 이동을 보수적으로 해서, 되돌아간 뒤 알아채는 데 1~2초 걸린다
     expectTracked(r, 0.88, ode.events.length);
   });
 
-  test('restarting from the top is eventually recognised', () => {
-    const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 24], [0, 64]]), tempoWobble: 0.05, seed: 2 });
+  test('restarting from the top is eventually recognised (practice mode)', () => {
+    const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 24], [0, 64]]), tempoWobble: 0.05, seed: 2, backward: 'free' });
     expectTracked(r, 0.75, ode.events.length);
     // 마지막 두 구절(재시작 이후 충분히 지난 뒤)은 정확해야 한다
     const tail = r.trace.filter((p) => p.truth >= 30);
@@ -181,3 +181,53 @@ describe('score following on synthesized performances', () => {
     expect(r.finalIndex).toBeGreaterThanOrEqual(ode.events.length - 2);
   });
 });
+
+describe('competition mode: never back to a place already passed', () => {
+  const ode = loadSample('ode-to-joy');
+  const bach = loadSample('bach-prelude-c');
+  // 지나간 곳으로 돌아가지 않는다: 뒤로 크게 움직였다면 그건 앞질러 간 추적기를 연주자가 있는 곳으로 바로잡은 것뿐이어야 한다
+  // (음 몇 개를 되돌려 바로잡는 건 괜찮다)
+  const neverIntoThePast = (trace: Array<{ idx: number; truth: number }>) =>
+    trace.every((p, i) => i === 0 || p.idx >= trace[i - 1].idx - 8 || p.idx >= p.truth - 8);
+  const monotonic = (trace: Array<{ idx: number }>) => {
+    let max = -1;
+    return trace.every((p) => (max = Math.max(max, p.idx)) - p.idx <= 8);
+  };
+
+  test('a repetitive piece with a mis-recognised section does not jump back to a similar earlier bar', () => {
+    const events = bach.events.map((e, i) => (i >= 100 && i < 200 ? { ...e, notes: e.notes.map((m) => m + ((i * 5) % 7) + 1), held: [] } : e));
+    const r = run({ ...bach, events }, { timbre: 'piano', reverb: 0.3, tempoWobble: 0.05, seed: 4 });
+    expect(neverIntoThePast(r.trace)).toBe(true);
+    expect(r.finalIndex).toBe(bach.events.length - 1);
+    // 잘못 인식된 긴 구간(약 20초)을 지나고 몇 초 안에 제자리를 찾는다
+    const after = r.trace.filter((p) => p.truth >= 240);
+    expect(after.filter((p) => Math.abs(p.idx - p.truth) <= 2).length / after.length).toBeGreaterThan(0.9);
+  });
+
+  test('a performer who starts again from the top does not pull the cursor back to the start', () => {
+    const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 24], [0, 64]]), tempoWobble: 0.05, seed: 2 });
+    // 6마디까지 치고 처음으로 돌아갔다: 커서는 처음 쪽으로 돌아가지 않는다
+    const restart = r.trace.findIndex((p, i) => i > 0 && p.truth < r.trace[i - 1].truth - 8);
+    const reached = Math.max(...r.trace.slice(0, restart).map((p) => p.idx));
+    expect(Math.min(...r.trace.slice(restart).map((p) => p.idx))).toBeGreaterThanOrEqual(reached - 8);
+  });
+
+  // 환희의 송가 앞 8마디에 도돌이표가 있다고 치고: 8마디 마지막 음 → 1마디 첫 음
+  const end8 = ode.events.reduce((last, e, i) => (e.measure <= 8 ? i : last), -1);
+  const repeats = [{ from: end8, to: 0 }];
+
+  test('a written repeat that is played is followed back once', () => {
+    const r = run(ode, { timbre: 'piano', play: playSegments(ode, [[0, 32], [0, 64]]), tempoWobble: 0.05, seed: 2, repeats });
+    expectTracked(r, 0.9, ode.events.length);
+    // 돌아간 건 한 번뿐
+    const backs = r.trace.filter((p, i) => i > 0 && p.idx < r.trace[i - 1].idx - 8).length;
+    expect(backs).toBe(1);
+  });
+
+  test('a written repeat that is skipped just goes on', () => {
+    const r = run(ode, { timbre: 'piano', tempoWobble: 0.05, seed: 2, repeats });
+    expectTracked(r, 0.97, ode.events.length);
+    expect(monotonic(r.trace)).toBe(true);
+  });
+});
+
