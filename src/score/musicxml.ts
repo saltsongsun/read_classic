@@ -6,7 +6,7 @@
  * OSMD 는 주석을 버리므로, 위치를 지키기 위해 직접 읽는다.
  * (붙임줄, 화음, 여러 성부의 backup/forward, 꾸밈음, 여러 보표/파트를 처리. 도돌이표는 펼치지 않는다.)
  */
-import { buildEvents, type RawNote, type RawStep } from '../follow/build';
+import { buildEvents, tempoAt, type RawNote, type RawStep, type TempoMark } from '../follow/build';
 import type { ScoreEvent } from '../follow/types';
 
 export interface ImgPos {
@@ -39,6 +39,8 @@ export interface ParsedScore {
   notes: ParsedNote[];
   measures: ParsedMeasure[];
   totalBeats: number;
+  /** 빠르기 표시들 (박 순서) */
+  tempos?: TempoMark[];
 }
 
 export interface ScoreStep {
@@ -97,6 +99,7 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
   const notes: ParsedNote[] = [];
   let measures: ParsedMeasure[] = [];
   let bpm: number | undefined;
+  const tempos: TempoMark[] = [];
 
   kids(root, 'part').forEach((part, partIndex) => {
     let divisions = 1;
@@ -130,13 +133,10 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
           }
           case 'direction':
           case 'sound': {
-            const sound = el.nodeName === 'sound' ? el : kid(el, 'sound');
-            const t = sound ? Number(sound.getAttribute('tempo')) : NaN;
-            if (bpm === undefined && t > 0) bpm = t;
-            if (bpm === undefined && el.nodeName === 'direction') {
-              const metro = el.getElementsByTagName('metronome')[0];
-              const pm = metro ? num(metro, 'per-minute') : undefined;
-              if (pm && pm > 0) bpm = pm;
+            const t = tempoOf(el);
+            if (t) {
+              bpm ??= t;
+              tempos.push({ onset: pos, bpm: t });
             }
             break;
           }
@@ -200,7 +200,34 @@ export function parseMusicXML(text: string, parser: XmlParser = new DOMParser(),
   notes.sort((a, b) => a.onset - b.onset || a.midi - b.midi);
   const last = measures[measures.length - 1];
   const totalBeats = last ? last.onset + last.duration : 0;
-  return { title, bpm, notes, measures, totalBeats };
+  return { title, bpm, notes, measures, totalBeats, tempos: cleanTempos(tempos) };
+}
+
+const BEAT_UNIT: Record<string, number> = { whole: 4, half: 2, quarter: 1, eighth: 0.5, '16th': 0.25, '32nd': 0.125 };
+
+/** <sound tempo> 또는 메트로놈 표시(♩=120, 𝅗𝅥=60 …)의 빠르기를 4분음표 기준으로. */
+function tempoOf(el: Element): number | undefined {
+  const sound = el.nodeName === 'sound' ? el : kid(el, 'sound');
+  const t = sound ? Number(sound.getAttribute('tempo')) : NaN;
+  if (t > 0 && t < 1000) return t;
+  if (el.nodeName !== 'direction') return undefined;
+  const metro = el.getElementsByTagName('metronome')[0];
+  const pm = metro ? num(metro, 'per-minute') : undefined;
+  if (!metro || !pm || pm <= 0) return undefined;
+  const unit = BEAT_UNIT[kid(metro, 'beat-unit')?.textContent?.trim() ?? 'quarter'] ?? 1;
+  const dots = kids(metro, 'beat-unit-dot').length;
+  return pm * unit * (2 - 0.5 ** dots);
+}
+
+/** 박 순서대로, 같은 자리 중복(여러 성부·보표)은 하나로. */
+function cleanTempos(tempos: TempoMark[]): TempoMark[] {
+  const out: TempoMark[] = [];
+  for (const t of [...tempos].sort((a, b) => a.onset - b.onset)) {
+    const prev = out[out.length - 1];
+    if (prev && Math.abs(prev.onset - t.onset) < 1e-6) prev.bpm = t.bpm;
+    else if (!prev || prev.bpm !== t.bpm) out.push({ ...t });
+  }
+  return out;
 }
 
 /** 마디 안에서 박자표보다 길어진 성부들의 시작·길이를 비례해서 줄인다. */
@@ -242,9 +269,11 @@ export function combinePages(pages: ParsedScore[]): ParsedScore {
   let measureOffset = 0;
   let bpm: number | undefined;
   let title: string | undefined;
+  const tempos: TempoMark[] = [];
   pages.forEach((p, pageIndex) => {
     bpm ??= p.bpm;
     title ??= p.title;
+    for (const t of p.tempos ?? []) tempos.push({ onset: t.onset + beatOffset, bpm: t.bpm });
     for (const n of p.notes) {
       notes.push({ ...n, page: pageIndex, onset: n.onset + beatOffset, measure: n.measure + measureOffset });
     }
@@ -254,7 +283,7 @@ export function combinePages(pages: ParsedScore[]): ParsedScore {
     beatOffset += p.totalBeats;
     measureOffset += p.measures.length;
   });
-  return { title, bpm, notes, measures, totalBeats: beatOffset };
+  return { title, bpm, notes, measures, totalBeats: beatOffset, tempos };
 }
 
 /** 같은 시점에 시작하는 음들을 한 칸으로 묶는다. */
@@ -269,8 +298,14 @@ export function toSteps(score: ParsedScore): ScoreStep[] {
 }
 
 /** 추적용 이벤트. event.cursorStep 은 toSteps() 결과의 인덱스. */
-export function eventsFromSteps(steps: ScoreStep[], totalBeats?: number): ScoreEvent[] {
-  const raw: RawStep[] = steps.map((s, i) => ({ onset: s.onset, notes: s.notes, measure: s.measure, cursorStep: i }));
+export function eventsFromSteps(steps: ScoreStep[], totalBeats?: number, tempos: TempoMark[] = []): ScoreEvent[] {
+  const raw: RawStep[] = steps.map((s, i) => ({
+    onset: s.onset,
+    notes: s.notes,
+    measure: s.measure,
+    cursorStep: i,
+    bpm: tempoAt(tempos, s.onset),
+  }));
   const events = buildEvents(raw);
   // 마지막 음의 길이는 악보 끝까지
   if (events.length && totalBeats !== undefined) {

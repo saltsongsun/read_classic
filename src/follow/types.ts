@@ -10,6 +10,8 @@ export interface ScoreEvent {
   measure: number;
   /** OSMD 커서를 처음부터 몇 번 next() 해야 이 지점인지. */
   cursorStep: number;
+  /** 악보에 적힌 이 지점의 빠르기 (♩/분). 빠르기 표시가 없는 악보면 없음. */
+  bpm?: number;
 }
 
 export interface FollowState {

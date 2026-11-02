@@ -15,6 +15,8 @@ export interface RawStep {
   notes: RawNote[];
   measure: number;
   cursorStep: number;
+  /** 이 칸의 악보 빠르기 (♩/분, 빠르기 표시가 있을 때만) */
+  bpm?: number;
 }
 
 const EPS = 1e-6;
@@ -47,7 +49,9 @@ export function buildEvents(steps: RawStep[]): ScoreEvent[] {
     const next = merged[i + 1];
     const longest = Math.max(...s.notes.map((n) => n.duration));
     const beats = next ? next.onset - s.onset : Math.max(1, longest);
-    events.push({ notes, held, beats: Math.max(beats, 1 / 32), measure: s.measure, cursorStep: s.cursorStep });
+    const ev: ScoreEvent = { notes, held, beats: Math.max(beats, 1 / 32), measure: s.measure, cursorStep: s.cursorStep };
+    if (s.bpm && s.bpm > 0) ev.bpm = s.bpm;
+    events.push(ev);
     active = active.concat(s.notes);
   }
   return events;
@@ -55,4 +59,29 @@ export function buildEvents(steps: RawStep[]): ScoreEvent[] {
 
 function uniq(xs: number[]): number[] {
   return [...new Set(xs)].sort((a, b) => a - b);
+}
+
+/** 악보 빠르기 표시 (시작 박 위치, ♩/분). */
+export interface TempoMark {
+  onset: number;
+  bpm: number;
+}
+
+/** 박 위치의 빠르기: 그 앞의 마지막 표시 (첫 표시보다 앞이면 첫 표시). */
+export function tempoAt(tempos: TempoMark[], onset: number): number | undefined {
+  if (tempos.length === 0) return undefined;
+  let bpm = tempos[0].bpm;
+  for (const t of tempos) {
+    if (t.onset <= onset + EPS) bpm = t.bpm;
+    else break;
+  }
+  return bpm;
+}
+
+/**
+ * 악보대로 연주할 때 걸리는 시간 (초). 빠르기 표시가 바뀌는 곳은 그대로 반영하고,
+ * 표시가 없는 이벤트는 fallbackBpm 으로 계산한다.
+ */
+export function nominalSeconds(events: ScoreEvent[], fallbackBpm: number): number {
+  return events.reduce((sum, e) => sum + (e.beats * 60) / (e.bpm ?? fallbackBpm), 0);
 }

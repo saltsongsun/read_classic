@@ -131,11 +131,14 @@ export class ScoreView {
     cursor.reset();
     const it = cursor.iterator;
     const steps: RawStep[] = [];
+    const hasTempo = this.osmd.Sheet.HasBPMInfo;
     let step = 0;
     let guard = 0;
     while (!it.EndReached && guard++ < 200000) {
       const onset = it.CurrentEnrolledTimestamp.RealValue * 4;
       const measure = it.CurrentMeasure?.MeasureNumber ?? 0;
+      // 반복·빠르기 바뀜을 따라가며 지금 자리의 악보 빠르기 (표시가 없는 악보면 쓰지 않는다)
+      const bpm = hasTempo && it.CurrentBpm > 0 ? it.CurrentBpm : undefined;
       const notes: RawNote[] = [];
       for (const ve of it.CurrentVoiceEntries ?? []) {
         if (ve.IsGrace) continue;
@@ -144,7 +147,7 @@ export class ScoreView {
           if (raw) notes.push(raw);
         }
       }
-      steps.push({ onset, notes, measure, cursorStep: step });
+      steps.push({ onset, notes, measure, cursorStep: step, bpm });
       it.moveToNextVisibleVoiceEntry(false);
       step++;
     }

@@ -98,6 +98,10 @@ const RELOC_TAU_BACK = 24; // 시작 위치 사전확률의 감쇠 (이벤트 �
 const RELOC_TAU_FWD = 3; // 앞으로 건너뛰는 일은 드물다
 const RELOC_CONFIRM = 2; // 같은 결론이 몇 번 연속 나와야 옮길지
 const RELOC_MIN_SIM = 0.72; // 옮겨 갈 곳의 평균 유사도 하한
+// 시간 힌트 (위치를 놓쳤을 때 흐른 시간으로 어림한 위치): 그 주변도 찾아본다
+const HINT_SPAN = 24; // 힌트 앞뒤로 몇 단위까지
+const HINT_TAU = 8; // 힌트 주변 사전확률의 감쇠
+const RELOC_MAX_SPAN = 400; // 한 번에 찾아볼 최대 범위 (계산량)
 
 function addNote(t: Float64Array, midi: number, gain: number): void {
   for (let h = 0; h < HARMONIC_WEIGHTS.length; h++) {
@@ -239,6 +243,7 @@ export class ScoreFollower {
   private sinceReloc = 0;
   private relocCandidate = -1;
   private relocVotes = 0;
+  private hintUnit = -1;
 
   constructor(events: ScoreEvent[], opts: TrackerOptions) {
     if (events.length === 0) throw new Error('악보에 음표가 없습니다.');
@@ -500,6 +505,14 @@ export class ScoreFollower {
   }
 
   /**
+   * 시간 힌트: 위치를 놓쳤을 때 흐른 시간으로 어림한 이벤트 번호 (null 이면 없앰).
+   * 재탐색할 때 지금 위치 주변뿐 아니라 이 주변도 찾아본다. 소리가 실제로 맞아야만 옮겨 간다.
+   */
+  setHint(eventIndex: number | null): void {
+    this.hintUnit = eventIndex === null || eventIndex < 0 ? -1 : this.unitOf(Math.min(eventIndex, this.events.length - 1));
+  }
+
+  /**
    * 최근 연주를 "현재 위치 주변 아무 데서나 시작"하는 모델로 다시 풀어서,
    * 지금 경로보다 훨씬 그럴듯하면 그쪽으로 옮긴다.
    */
@@ -507,8 +520,18 @@ export class ScoreFollower {
     // 마지막 음에 도달했으면 곡이 끝난 것: 뒤따르는 박수·잡음으로 위치를 바꾸지 않는다
     if (this.current >= this.n - 1) return;
     const center = Math.max(0, this.current);
-    const lo = Math.max(0, center - RELOC_BACK);
-    const hi = Math.min(this.n - 1, center + RELOC_FWD);
+    let lo = Math.max(0, center - RELOC_BACK);
+    let hi = Math.min(this.n - 1, center + RELOC_FWD);
+    const hint = this.hintUnit;
+    if (hint >= 0) {
+      lo = Math.max(0, Math.min(lo, hint - HINT_SPAN));
+      hi = Math.min(this.n - 1, Math.max(hi, hint + HINT_SPAN));
+      if (hi - lo > RELOC_MAX_SPAN) {
+        // 너무 넓으면 힌트 쪽을 남긴다
+        lo = Math.max(0, hint - HINT_SPAN);
+        hi = Math.min(this.n - 1, hint + HINT_SPAN);
+      }
+    }
     let b = this.altCur;
     let nb = this.altNext;
     b.clear();
@@ -518,7 +541,8 @@ export class ScoreFollower {
     let z = 0;
     for (let j = lo; j <= hi; j++) {
       const d = j - (center);
-      const w = Math.exp(d < 0 ? d / RELOC_TAU_BACK : -d / RELOC_TAU_FWD);
+      let w = Math.exp(d < 0 ? d / RELOC_TAU_BACK : -d / RELOC_TAU_FWD);
+      if (hint >= 0) w += Math.exp(-Math.abs(j - hint) / HINT_TAU);
       b.a[j] = w;
       b.s[j] = w;
       z += 2 * w;
@@ -554,12 +578,13 @@ export class ScoreFollower {
       return;
     }
 
-    // 확률이 비슷한 후보가 여럿이면 (같은 선율 반복) 지금 위치에서 가까운 쪽을 고른다
+    // 확률이 비슷한 후보가 여럿이면 (같은 선율 반복) 지금 위치에서 (놓쳤으면 시간 힌트에서) 가까운 쪽을 고른다
     const { bestP } = this.argmax(b, lo, hi);
+    const ref = hint >= 0 ? hint : center;
     let best = -1;
     for (let j = lo; j <= hi; j++) {
       const p = b.a[j] + b.s[j];
-      if (p >= 0.5 * bestP && (best < 0 || Math.abs(j - center) < Math.abs(best - center))) best = j;
+      if (p >= 0.5 * bestP && (best < 0 || Math.abs(j - ref) < Math.abs(best - ref))) best = j;
     }
     if (best < 0 || Math.abs(best - this.current) <= 2) {
       this.relocVotes = 0;

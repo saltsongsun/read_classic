@@ -2,7 +2,7 @@ import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
 import './styles.css';
 import { FeatureExtractor, LevelGate, type AudioFrame } from './audio/features';
 import { startMic, type MicHandle } from './audio/mic';
-import { formatDuration, ProgressEstimator, type ProgressSnapshot } from './follow/progress';
+import { formatDuration, ProgressEstimator, type ProgressOptions, type ProgressSnapshot } from './follow/progress';
 import { ScoreFollower } from './follow/tracker';
 import type { ScoreEvent } from './follow/types';
 import { layoutEvents } from './score/imageLayout';
@@ -43,6 +43,7 @@ const el = {
   measureTotal: $('measureTotal'),
   tempo: $('tempo'),
   progressFill: $('progressFill'),
+  timeCheck: $('timeCheck'),
   remainLabel: $('remainLabel'),
   remain: $('remain'),
   elapsed: $('elapsed'),
@@ -487,7 +488,7 @@ async function showImages(stored: lib.StoredScore): Promise<LoadedScore> {
   // 인식하지 못한 쪽은 비워 둔다 (그 쪽은 건너뛰고 따라간다)
   const score = combinePages(omr.map((p, i) => (p.musicxml ? parseMusicXML(p.musicxml, parser, i) : emptyPage())));
   const steps = toSteps(score);
-  const events = eventsFromSteps(steps, score.totalBeats);
+  const events = eventsFromSteps(steps, score.totalBeats, score.tempos);
   if (events.length === 0) throw new Error('인식된 음표가 없어요.');
   const pages: PageImage[] = (stored.pages ?? []).map((blob, i) => ({ blob, ...(stored.pageSizes?.[i] ?? { width: 1, height: 1 }) }));
   const geo = layoutEvents(
@@ -517,6 +518,13 @@ function currentBpm(): number {
   return Number.isFinite(v) && v >= 20 && v <= 320 ? v : (loaded?.bpm ?? 100);
 }
 
+/** 진행률 계산기 설정: 빠르기는 악보에 적혀 있거나 사용자가 직접 정했을 때만 믿는다. */
+function progressOptions(): ProgressOptions {
+  const fromScore = !!loaded?.events.some((e) => e.bpm);
+  const userSet = !!loaded && Math.round(currentBpm()) !== Math.round(loaded.bpm);
+  return { scoreBpm: currentBpm(), expectedTotalSec: scorePrefs.expectedSec, tempoKnown: fromScore || userSet };
+}
+
 /** 추적기와 진행률 계산기를 (다시) 만든다. 마이크 샘플레이트가 정해지면 그에 맞춘다. */
 function createFollower(): void {
   if (!loaded) return;
@@ -524,7 +532,7 @@ function createFollower(): void {
   fx = new FeatureExtractor(sampleRate);
   follower = new ScoreFollower(loaded.events, { hopSec: fx.hopSec, bpm: currentBpm(), sharpness: prefs.strictness });
   if (position >= 0) follower.setPosition(position);
-  progress = new ProgressEstimator(loaded.events, { scoreBpm: currentBpm(), expectedTotalSec: scorePrefs.expectedSec });
+  progress = new ProgressEstimator(loaded.events, progressOptions());
   if (position >= 0) progress.jumpTo(position);
   wasEnding = false;
 }
@@ -616,6 +624,8 @@ function onSamples(block: Float32Array): void {
     const voiced = gate.update(f.rms, f.flatness);
     const st = follower.update(f, voiced);
     progress?.update(now, st.index, voiced);
+    // 시간 검증: 위치를 놓쳤으면 흐른 시간으로 어림한 곳 주변도 찾아보게 한다
+    follower.setHint(progress?.timeHint() ?? null);
     lastFrame = f;
     lastVoiced = voiced;
     if (voiced) {
@@ -686,6 +696,7 @@ function updateDock(): void {
       setText(el.elapsed, '첫 음을 기다려요');
     }
   }
+  renderTimeCheck(s);
   el.dock.classList.toggle('ending', ending);
   el.dock.classList.toggle('finished', !!s?.finished);
   if (ending && !wasEnding) navigator.vibrate?.([250, 120, 250]);
@@ -701,9 +712,50 @@ function updateDock(): void {
   }
   const quiet = performance.now() - lastVoicedAt > 1200;
   if (ending) setStatus('곧 끝나요');
+  else if (s?.check === 'lost') setStatus('위치를 놓쳤어요 · 흐른 시간으로 남은 시간을 계산하며 다시 찾는 중', true);
   else if (quiet) setStatus(position < 0 ? '첫 음을 기다리는 중 · 듣는 중' : '기다리는 중 · 소리가 나면 이어서 따라가요');
   else if (confidence < 0.35) setStatus('위치를 찾는 중…', true);
   else setStatus('따라가는 중');
+}
+
+/**
+ * 시간 검증 표시: 추적 위치가 흐른 시간과 맞게 가는지, 예상보다 빠른지 느린지.
+ * 시작 전에는 예상 길이를 무엇으로 계산했는지 보여 준다.
+ */
+function renderTimeCheck(s: ProgressSnapshot | null): void {
+  let text = '';
+  let tone: '' | 'ok' | 'warn' = '';
+  let title = '';
+  if (s && !s.finished) {
+    if (!s.started) {
+      const changes = new Set(loaded?.events.map((e) => e.bpm).filter(Boolean)).size > 1;
+      if (s.basis === 'expected') text = `예상 연주 시간 기준 · 악보 빠르기대로면 ${formatDuration(s.scoreTotalSec, true)}`;
+      else if (s.basis === 'score') text = `악보 빠르기 기준 길이 (♩ ${Math.round(currentBpm())}${changes ? ' · 중간에 바뀌는 빠르기 반영' : ''})`;
+      else text = `빠르기 표시가 없어 ♩ ${Math.round(currentBpm())} 로 어림 · 설정에서 예상 시간을 넣으면 정확해요`;
+      title = s.basis === 'guess' ? '설정에서 예상 연주 시간이나 템포를 넣으면 처음부터 더 정확해요' : '';
+    } else if (s.check === 'lost') {
+      text = '위치 확인 중 · 흐른 시간으로 계산';
+      tone = 'warn';
+      title = '소리는 나는데 악보 위치가 시간만큼 나아가지 않아요. 그동안은 흐른 시간으로 남은 시간을 계산해요.';
+    } else if (s.check === 'slow' || s.check === 'fast') {
+      const pct = Math.round(Math.abs(s.deviation ?? 0) * 100);
+      text = `예상보다 ${pct}% ${s.check === 'slow' ? '느림' : '빠름'}`;
+      tone = 'warn';
+      title = s.basis === 'expected' ? '예상 연주 시간이 맞는지 확인해 보세요' : '악보의 빠르기 표시와 많이 달라요';
+    } else if (s.deviation !== null) {
+      const pct = Math.round(s.deviation * 100);
+      text = Math.abs(pct) < 5 ? '예상대로 진행 중' : `예상보다 ${Math.abs(pct)}% ${pct > 0 ? '느림' : '빠름'}`;
+      tone = 'ok';
+    } else if (s.elapsedSec > 10) {
+      text = '위치와 흐른 시간이 맞아요';
+      tone = 'ok';
+    }
+  }
+  setText(el.timeCheck, text);
+  el.timeCheck.hidden = !text;
+  el.timeCheck.title = title;
+  el.timeCheck.classList.toggle('ok', tone === 'ok');
+  el.timeCheck.classList.toggle('warn', tone === 'warn');
 }
 
 function setStatus(text: string, warn = false): void {
@@ -920,8 +972,8 @@ el.bpm.addEventListener('change', () => {
   const bpm = currentBpm();
   el.bpm.value = String(Math.round(bpm));
   follower?.setScoreTempo(bpm);
-  progress?.setOptions({ scoreBpm: bpm });
   scorePrefs.bpm = Math.round(bpm);
+  progress?.setOptions(progressOptions());
   if (currentId) lib.savePrefs(currentId, scorePrefs);
   updateDock();
 });
@@ -944,7 +996,7 @@ el.expected.addEventListener('change', () => {
   }
   scorePrefs.expectedSec = sec;
   el.expected.value = sec ? formatDuration(sec) : '';
-  progress?.setOptions({ expectedTotalSec: sec });
+  progress?.setOptions(progressOptions());
   if (currentId) lib.savePrefs(currentId, scorePrefs);
   updateDock();
 });

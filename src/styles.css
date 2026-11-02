@@ -915,6 +915,36 @@ kbd {
   font-weight: var(--fw-regular);
   color: var(--ink-3);
 }
+/* 시간 검증: 위치가 흐른 시간과 맞게 가는지 */
+.time-check {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: var(--fw-medium);
+  letter-spacing: 0.01em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.time-check.ok::before,
+.time-check.warn::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 1px;
+}
+.time-check.ok {
+  color: var(--gold);
+}
+.time-check.warn {
+  color: var(--wine);
+  font-weight: var(--fw-semibold);
+}
 .dock-nav {
   display: flex;
   gap: 2px;
@@ -941,6 +971,7 @@ kbd {
 .dock.ending .measure-label,
 .dock.ending .measure-total,
 .dock.ending .elapsed,
+.dock.ending .time-check,
 .dock.ending .tempo,
 .dock.ending .dock-nav .icon-btn {
   color: color-mix(in srgb, var(--on-dark) 75%, transparent);
@@ -1272,6 +1303,13 @@ kbd {
   }
   .chroma {
     display: none;
+  }
+  .meters {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .time-check {
+    flex-basis: 100%;
   }
   .level {
     width: 100%;

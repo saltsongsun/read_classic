@@ -95,6 +95,29 @@ describe('parseMusicXML', () => {
     expect(all.notes.some((n) => n.page === 1)).toBe(false);
   });
 
+  test('reads tempo changes, including metronome marks in other beat units', () => {
+    const measure = (n: number, direction = '') =>
+      `<measure number="${n}">${n === 1 ? '<attributes><divisions>1</divisions><time><beats>4</beats><beat-type>4</beat-type></time></attributes>' : ''}${direction}` +
+      '<note><pitch><step>C</step><octave>4</octave></pitch><duration>4</duration><voice>1</voice></note></measure>';
+    const metro = (unit: string, dot: boolean, pm: number) =>
+      `<direction><direction-type><metronome><beat-unit>${unit}</beat-unit>${dot ? '<beat-unit-dot/>' : ''}<per-minute>${pm}</per-minute></metronome></direction-type></direction>`;
+    const xml = `<?xml version="1.0"?><score-partwise version="4.0"><part-list><score-part id="P1"/></part-list><part id="P1">
+      ${measure(1, '<direction><direction-type><words>Lento</words></direction-type><sound tempo="50"/></direction>')}
+      ${measure(2)}
+      ${measure(3, metro('quarter', true, 80))}
+      ${measure(4, metro('half', false, 60))}
+    </part></score-partwise>`;
+    const parsed = parseMusicXML(xml, parser);
+    expect(parsed.bpm).toBe(50);
+    // 점4분음표=80 과 2분음표=60 은 둘 다 ♩=120 (같은 빠르기가 이어지면 하나로)
+    expect(parsed.tempos).toEqual([
+      { onset: 0, bpm: 50 },
+      { onset: 8, bpm: 120 },
+    ]);
+    const events = eventsFromSteps(toSteps(parsed), parsed.totalBeats, parsed.tempos);
+    expect(events.map((e) => e.bpm)).toEqual([50, 50, 120, 120]);
+  });
+
   test('rejects broken input', () => {
     expect(() => parseMusicXML('<not-xml', parser)).toThrow();
   });

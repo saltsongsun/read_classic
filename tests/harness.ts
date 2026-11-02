@@ -50,7 +50,7 @@ export interface RunResult {
   maxIndex: number;
   trace: Array<{ t: number; idx: number; truth: number }>;
   /** 남은 시간 추정 기록: 추정값과 실제 남은 시간 (초) */
-  remaining: Array<{ t: number; est: number; truth: number; started: boolean }>;
+  remaining: Array<{ t: number; est: number; truth: number; started: boolean; check: string }>;
   /** 실제 연주 끝 시각 (마지막 음이 끝나는 때) */
   endTime: number;
 }
@@ -65,6 +65,8 @@ export interface RunOptions extends Partial<SynthOptions> {
   startAt?: number;
   /** 남은 시간 추정에 줄 예상 연주 시간 (초) */
   expectedTotalSec?: number;
+  /** 시간 검증의 위치 힌트를 추적기에 주지 않는다 (비교용) */
+  noTimeHint?: boolean;
 }
 
 export function run(score: SampleScore, opts: RunOptions): RunResult {
@@ -112,8 +114,9 @@ export function run(score: SampleScore, opts: RunOptions): RunResult {
       const st = tracker.update(f, voiced);
       idx = st.index;
       progress.update(f.time, st.index, voiced);
+      if (!opts.noTimeHint) tracker.setHint(progress.timeHint());
       const snap = progress.snapshot();
-      remaining.push({ t: f.time, est: snap.remainingSec, truth: Math.max(0, endTime - f.time), started: snap.started });
+      remaining.push({ t: f.time, est: snap.remainingSec, truth: Math.max(0, endTime - f.time), started: snap.started, check: snap.check });
       maxIndex = Math.max(maxIndex, idx);
       for (let j = 0; j <= idx; j++) if (Number.isNaN(reached[j])) reached[j] = f.time;
       const truth = truthOf(f.time - 0.05);
