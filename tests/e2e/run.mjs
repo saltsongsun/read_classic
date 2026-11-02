@@ -230,6 +230,8 @@ if (omrReady) {
   await page.setInputFiles('#fileInput', join(root, 'tests/pages/cover-and-music.pdf'));
   await page.waitForFunction(() => document.querySelectorAll('#importPages li').length === 3, null, { timeout: 60000 });
   const excluded = await page.$$eval('#importPages li', (ls) => ls.map((l) => l.classList.contains('excluded')));
+  // 스캔 악보 PDF(JBIG2·JPEG2000 그림)를 그리는 해독기가 함께 배포되는지
+  const wasmOk = await page.evaluate(async () => (await fetch('pdfjs/wasm/jbig2.wasm')).ok && (await fetch('pdfjs/wasm/openjpeg.wasm')).ok);
   await page.click('#importStart');
   let toastText = '';
   try {
@@ -240,10 +242,10 @@ if (omrReady) {
   }
   const st = await page.evaluate(() => ({ kind: window.__readClassic.kind, events: window.__readClassic.events.length }));
   const pass =
-    JSON.stringify(excluded) === JSON.stringify([true, true, false]) && /\(1쪽,/.test(toastText) && st.kind === 'image' && st.events > 50 && errors.length === 0;
+    wasmOk && JSON.stringify(excluded) === JSON.stringify([true, true, false]) && /\(1쪽,/.test(toastText) && st.kind === 'image' && st.events > 50 && errors.length === 0;
   failed ||= !pass;
   console.log(
-    `${pass ? 'PASS' : 'FAIL'} PDF 표지 건너뛰기: 뺀 쪽 ${JSON.stringify(excluded)}, 악보 ${st.kind}, 음 ${st.events}개, 알림 "${toastText.trim()}"` +
+    `${pass ? 'PASS' : 'FAIL'} PDF 표지 건너뛰기: 스캔 해독기 ${wasmOk ? '있음' : '없음'}, 뺀 쪽 ${JSON.stringify(excluded)}, 악보 ${st.kind}, 음 ${st.events}개, 알림 "${toastText.trim()}"` +
       (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
   );
   await browser.close();

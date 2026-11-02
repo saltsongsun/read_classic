@@ -20,6 +20,8 @@ export interface PageAnalysis {
   staves: Staff[];
   /** 악보가 있는 쪽인지 (오선이 2개 이상) */
   music: boolean;
+  /** 아무것도 그려지지 않은 쪽 (빈 쪽이거나, PDF 안의 그림을 풀지 못함) */
+  blank?: boolean;
 }
 
 /** 분석할 때 쓰는 가로 폭 (이보다 크면 줄여서 본다) */
@@ -139,7 +141,11 @@ export function analyzeGray(gray: ArrayLike<number>, width: number, height: numb
     }
     i = j;
   }
-  return { staves, music: staves.length >= 2 };
+  // 잉크가 거의 없는 쪽: 빈 쪽 (스캔 그림을 풀지 못하면 이렇게 된다)
+  let ink = 0;
+  for (let i = 0; i < gray.length; i += 7) if (inkOf[gray[i]] > 0.5) ink++;
+  const blank = ink / Math.ceil(gray.length / 7) < 0.0005;
+  return { staves, music: staves.length >= 2, blank };
 }
 
 /** 캔버스(쪽 그림)를 분석용 크기로 줄여서 살펴본다. */
@@ -172,8 +178,8 @@ export function coveredStaves(staves: Staff[], boxes: number[][]): number {
  * 판별을 믿을 수 없으므로 모든 쪽을 넣는다.
  */
 export function defaultInclusion(pages: Array<PageAnalysis | undefined>): boolean[] {
-  const known = pages.filter((p): p is PageAnalysis => !!p);
+  const known = pages.filter((p): p is PageAnalysis => !!p && !p.blank);
   const music = known.filter((p) => p.music).length;
-  if (known.length === 0 || music < Math.max(1, 0.2 * known.length)) return pages.map(() => true);
+  if (known.length === 0 || music < Math.max(1, 0.2 * known.length)) return pages.map((p) => !p?.blank);
   return pages.map((p) => !p || p.music);
 }

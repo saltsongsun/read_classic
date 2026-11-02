@@ -45,6 +45,16 @@ describe('page analysis', () => {
     expect(defaultInclusion([undefined, a('bach-clean')])).toEqual([true, true]);
   });
 
+  test('a page that came out blank is never sent for recognition', () => {
+    const white = new Uint8Array(1200 * 1700).fill(255);
+    const blank = analyzeGray(white, 1200, 1700);
+    expect(blank.blank).toBe(true);
+    const { gray, w, h } = load('bach-clean');
+    expect(analyzeGray(gray, w, h).blank).toBe(false);
+    // 모든 쪽이 백지여도 (예전 버그: 스캔 그림을 풀지 못함) 인식하러 보내지 않는다
+    expect(defaultInclusion([blank, blank, blank])).toEqual([false, false, false]);
+  });
+
   test('recognised systems are matched against the staves found', () => {
     const { gray, w, h } = load('bach-clean');
     const { staves } = analyzeGray(gray, w, h);

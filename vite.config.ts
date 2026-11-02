@@ -1,6 +1,30 @@
-import { defineConfig } from 'vitest/config';
+import { cpSync, existsSync, mkdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { defineConfig, type Plugin } from 'vitest/config';
+
+const root = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * PDF 를 그릴 때 pdf.js 가 따로 불러오는 파일들을 public/pdfjs/ 로 복사한다 (빌드 결과에도 들어간다).
+ * - wasm: 스캔한 악보 PDF 에 흔한 JBIG2(흑백 스캔)·JPEG2000 그림 해독기. 없으면 그 쪽이 백지로 그려진다.
+ * - standard_fonts, cmaps: 글꼴을 넣지 않은 PDF 의 글자
+ */
+function pdfjsAssets(): Plugin {
+  const copy = () => {
+    for (const dir of ['wasm', 'standard_fonts', 'cmaps', 'iccs']) {
+      const src = join(root, 'node_modules', 'pdfjs-dist', dir);
+      const dst = join(root, 'public', 'pdfjs', dir);
+      if (!existsSync(src)) continue;
+      mkdirSync(dst, { recursive: true });
+      cpSync(src, dst, { recursive: true });
+    }
+  };
+  return { name: 'pdfjs-assets', buildStart: copy, configureServer: copy };
+}
 
 export default defineConfig({
+  plugins: [pdfjsAssets()],
   // GitHub Pages 등 하위 경로에 올려도 동작하도록 상대 경로로 빌드
   base: './',
   server: {

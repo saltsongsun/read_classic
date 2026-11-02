@@ -319,6 +319,9 @@ async function addImportFiles(files: File[]): Promise<void> {
         const pages = await pdfToPages(f, (d, n) => showImportProgress(`PDF 를 쪽별로 나누는 중… ${d}/${n}`));
         importList.push(...pages.map((pg) => ({ ...pg, include: true })));
         applyDefaultInclusion();
+        if (pages.length && pages.every((pg) => pg.analysis?.blank)) {
+          toast(`${f.name}: PDF 의 쪽을 그리지 못했어요. 지원하지 않는 그림 형식일 수 있어요. 쪽을 사진(JPG·PNG)으로 저장해 넣어 보세요.`);
+        }
       } else {
         importList.push({ ...(await imageToPage(f)), include: true });
       }
@@ -452,6 +455,7 @@ function thumbBadge(p: ImportItem): string {
   if (p.status === 'ok') return p.note ? `✓ ${p.note}` : '✓';
   if (p.status === 'partial') return `⚠ ${p.note ?? ''}`.trim();
   if (p.status === 'failed') return '✕ 못 읽음';
+  if (p.analysis?.blank) return '빈 쪽';
   if (!p.include) return p.analysis && !p.analysis.music ? '악보 없음 · 뺌' : '뺌';
   if (p.analysis?.music) return `오선 ${p.analysis.staves.length}개`;
   return '';

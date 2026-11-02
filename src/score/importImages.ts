@@ -56,7 +56,17 @@ export async function pdfToPages(file: Blob, onPage?: (done: number, total: numb
   const pdfjs = await import('pdfjs-dist');
   const worker = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
   pdfjs.GlobalWorkerOptions.workerSrc = worker;
-  const task = pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) });
+  // 해독기·글꼴 위치 (vite.config.ts 가 public/pdfjs/ 로 복사해 둔다). 작업 스레드에서 쓰므로 절대 주소로.
+  // wasm 이 없으면 JBIG2(흑백 스캔)·JPEG2000 그림을 풀지 못해 스캔 악보 쪽이 백지로 그려진다.
+  const assets = new URL('pdfjs/', document.baseURI).href;
+  const task = pdfjs.getDocument({
+    data: new Uint8Array(await file.arrayBuffer()),
+    wasmUrl: `${assets}wasm/`,
+    standardFontDataUrl: `${assets}standard_fonts/`,
+    cMapUrl: `${assets}cmaps/`,
+    cMapPacked: true,
+    iccUrl: `${assets}iccs/`,
+  });
   const doc = await task.promise;
   const pages: ImportPage[] = [];
   try {

@@ -124,6 +124,8 @@ def main() -> None:
         html = get("/").decode("utf-8")
         assert "Read Classic" in html, "웹 앱 첫 화면이 아닙니다"
         assert b"ode-to-joy" in get("/samples/index.json"), "예제 악보 목록이 없습니다"
+        # 스캔 악보 PDF(JBIG2 흑백 스캔·JPEG2000)를 그리는 pdf.js 해독기 (없으면 쪽이 백지로 그려진다)
+        assert len(get("/pdfjs/wasm/jbig2.wasm")) > 10000, "PDF 스캔 그림 해독기(jbig2.wasm)가 없습니다"
         t0 = time.time()
         result = post_image(ROOT / "tests" / "omr" / "ode-to-joy-photo.jpg")
         notes = result["musicxml"].count("<pitch>")
