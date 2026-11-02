@@ -51,7 +51,29 @@ def wait(cond, seconds: float, what: str):  # type: ignore[no-untyped-def]
     sys.exit(f"시간 안에 {what} 않았습니다")
 
 
+def show_logs() -> None:
+    """실패했을 때 원인을 볼 수 있게 앱 기록을 보여 준다."""
+    if SYSTEM == "Windows":
+        folder = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "ReadClassic"
+    elif SYSTEM == "Darwin":
+        folder = Path.home() / "Library" / "Logs" / "ReadClassic"
+    else:
+        folder = Path.home() / ".cache" / "read-classic"
+    for f in sorted(folder.glob("*.log")):
+        print(f"----- {f} -----")
+        print(f.read_text(encoding="utf-8", errors="replace")[-4000:])
+
+
 def main() -> None:
+    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[union-attr]
+    try:
+        run()
+    except BaseException:
+        show_logs()
+        raise
+
+
+def run() -> None:
     exe, package = Path(sys.argv[1]), Path(sys.argv[2])
     # 1) 가짜 릴리스 서버
     root = package.parent
@@ -82,7 +104,7 @@ def main() -> None:
     # 2) 앱 켜기
     if health():
         sys.exit(f"{PORT}번 포트에 이미 무언가 떠 있습니다")
-    subprocess.Popen([str(exe), "--port", str(PORT)], env=env)
+    proc = subprocess.Popen([str(exe), "--port", str(PORT)], env=env)
     first = wait(health, 120, "앱이 켜지지")
     print("켜짐:", first["app"], "pid", first["pid"])
     st = call("/api/update?force=1")
@@ -103,6 +125,7 @@ def main() -> None:
     last: dict = {}
 
     def gone() -> bool:
+        proc.poll()  # 끝난 앱을 거둬 좀비로 남지 않게 (실제로는 운영체제가 해 준다)
         h = health()
         if h is None:
             return True
@@ -119,6 +142,7 @@ def main() -> None:
 
     wait(gone, 300, "예전 판이 꺼지지")
     print("예전 판이 꺼짐 → 설치 중")
+    proc.poll()
     second = wait(lambda: (h := health()) and h["pid"] != first["pid"] and h, 300, "새 판이 다시 켜지지")
     print("다시 켜짐:", second["app"], "pid", second["pid"])
     assert second["desktop"] is True

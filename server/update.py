@@ -196,9 +196,18 @@ class Updater:
             subprocess.run(["hdiutil", "detach", str(mount), "-quiet"], check=False)
             raise RuntimeError("dmg 안에 앱이 없습니다")
         b = shlex.quote(str(bundle))
+        log = Path.home() / "Library" / "Logs" / "ReadClassic"
+        log.mkdir(parents=True, exist_ok=True)
         script = f"""#!/bin/sh
 # 이 앱이 꺼지길 기다렸다가 새 판으로 바꾸고 다시 연다 (실패하면 예전 판을 되돌린다)
-while kill -0 {os.getpid()} 2>/dev/null; do sleep 0.3; done
+exec >>{shlex.quote(str(log / "update.log"))} 2>&1
+echo "$(date) 업데이트: {b}"
+i=0
+while [ $i -lt 200 ]; do
+  st=$(ps -o stat= -p {os.getpid()} 2>/dev/null)
+  case "$st" in ''|Z*) break;; esac  # 끝났거나 좀비(이미 끝남)
+  sleep 0.3; i=$((i+1))
+done
 rm -rf {b}.old
 if mv {b} {b}.old && ditto {shlex.quote(str(new_app))} {b}; then
   rm -rf {b}.old
@@ -206,7 +215,8 @@ else
   rm -rf {b}; mv {b}.old {b}
 fi
 hdiutil detach {shlex.quote(str(mount))} -quiet
-nohup {b}/Contents/MacOS/read-classic --after-update >/dev/null 2>&1 &
+echo "$(date) 새 판 켜기"
+nohup {b}/Contents/MacOS/read-classic --after-update &
 """
         sh = mount.parent / f"read-classic-update-{os.getpid()}.sh"
         sh.write_text(script, encoding="utf-8")
