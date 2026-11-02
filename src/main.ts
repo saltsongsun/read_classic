@@ -97,6 +97,9 @@ const el = {
   importFiles: $<HTMLInputElement>('importFiles'),
   importServer: $('importServer'),
   importProgress: $('importProgress'),
+  jobs: $('jobs'),
+  jobList: $('jobList'),
+  jobsBadge: $('jobsBadge'),
   importSelect: $('importSelect'),
   importSummary: $('importSummary'),
   importRange: $<HTMLInputElement>('importRange'),
@@ -291,7 +294,14 @@ async function addFiles(files: FileList | File[]): Promise<void> {
     }
   }
   if (others.length) await renderLibrary();
-  if (images.length) {
+  const pdfs = images.filter((f) => isPdf(f));
+  if (pdfs.length >= 2) {
+    // 여러 PDF: 파일마다 따로 악보로, 뒤에서 차례대로 인식한다 (표지·해설 쪽은 자동으로 뺀다)
+    for (const f of pdfs) void enqueuePdf(f);
+    const photos = images.filter((f) => !isPdf(f));
+    if (photos.length) void enqueuePhotos(photos);
+    toast(`악보 ${pdfs.length + (photos.length ? 1 : 0)}개를 뒤에서 인식할게요. 그동안 다른 악보를 써도 돼요.`);
+  } else if (images.length) {
     closeLibrary();
     openImport(images);
   } else if (last) {
@@ -304,12 +314,13 @@ async function addFiles(files: FileList | File[]): Promise<void> {
 /** 가져오기 목록의 한 쪽: 인식할지, 인식 결과는 어땠는지 */
 interface ImportItem extends ImportPage {
   include: boolean;
+  /** 원래 PDF·사진 묶음에서 몇 쪽인지 (알림용) */
+  pageNo?: number;
   status?: 'ok' | 'partial' | 'failed';
   note?: string;
 }
 let importList: ImportItem[] = [];
 let importThumbUrls: string[] = [];
-let importAbort: AbortController | null = null;
 
 function openImport(files: File[]): void {
   importList = [];
@@ -483,30 +494,131 @@ async function refreshServerStatus(target: HTMLElement): Promise<boolean> {
   return st.ok;
 }
 
+/** 창에서 고른 쪽으로 인식 작업을 만들고 창을 닫는다. 인식은 뒤에서 하고, 끝나면 (듣는 중이 아니면) 연다. */
 async function startImport(): Promise<void> {
   const pages = importList.filter((p) => p.include);
   if (pages.length === 0) {
     toast(importList.length ? '인식할 쪽을 하나 이상 골라 주세요.' : '악보 사진이나 PDF 를 먼저 넣어 주세요.');
     return;
   }
-  const title = el.importTitle.value.trim() || '사진 악보';
   if (!(await refreshServerStatus(el.importServer))) return;
-  el.importStart.disabled = true;
-  importAbort = new AbortController();
-  const total = pages.length;
-  const results: OmrPage[] = [];
-  for (const p of importList) {
-    p.status = undefined;
-    p.note = undefined;
-  }
-  renderThumbs();
-  const started = performance.now();
+  const title = el.importTitle.value.trim() || '사진 악보';
+  // 쪽 번호(원래 PDF 기준)를 기억해 둔다: 결과 알림에 쓴다
+  pages.forEach((pg) => (pg.pageNo = importList.indexOf(pg) + 1));
+  const job = newJob(title, true);
+  job.pages = pages;
+  job.status = 'queued';
+  el.importDialog.close();
+  toast(`'${title}' 악보를 뒤에서 인식해요. 목록의 "인식 중"에서 진행을 볼 수 있어요.`);
+  renderJobs();
+  void runQueue();
+}
+
+// ---------- 뒤에서 인식하기 (여러 악보를 차례로) ----------
+type JobStatus = 'preparing' | 'queued' | 'running' | 'done' | 'failed' | 'canceled';
+interface ImportJob {
+  id: number;
+  title: string;
+  pages: ImportItem[];
+  status: JobStatus;
+  done: number;
+  message: string;
+  started: number;
+  abort: AbortController;
+  /** 끝나면 바로 열기 (창에서 시작한 하나짜리) */
+  openWhenDone: boolean;
+  scoreId?: string;
+}
+let jobs: ImportJob[] = [];
+let jobSeq = 0;
+let queueBusy = false;
+
+function newJob(title: string, openWhenDone: boolean): ImportJob {
+  const job: ImportJob = {
+    id: ++jobSeq,
+    title,
+    pages: [],
+    status: 'preparing',
+    done: 0,
+    message: '준비 중…',
+    started: 0,
+    abort: new AbortController(),
+    openWhenDone,
+  };
+  jobs.push(job);
+  renderJobs();
+  return job;
+}
+
+/** PDF 하나 → 악보 하나 (쪽으로 나누고, 오선이 없는 쪽은 뺀다) */
+async function enqueuePdf(f: File): Promise<void> {
+  const job = newJob(f.name.replace(/\.[^.]+$/, ''), false);
   try {
+    const pages = await pdfToPages(f, (d, n) => {
+      job.message = `쪽으로 나누는 중… ${d}/${n}`;
+      renderJobs();
+    });
+    if (job.status === 'canceled') return;
+    if (pages.length && pages.every((pg) => pg.analysis?.blank)) throw new Error('PDF 의 쪽을 그리지 못했어요 (지원하지 않는 그림 형식)');
+    const inc = defaultInclusion(pages.map((pg) => pg.analysis));
+    job.pages = pages.map((pg, i) => ({ ...pg, include: inc[i], pageNo: i + 1 })).filter((pg) => pg.include);
+    if (!job.pages.length) throw new Error('악보가 있는 쪽을 찾지 못했어요');
+    job.status = 'queued';
+    job.message = `대기 중 · ${job.pages.length}쪽${job.pages.length < pages.length ? ` (악보 없는 ${pages.length - job.pages.length}쪽 뺌)` : ''}`;
+  } catch (e) {
+    job.status = 'failed';
+    job.message = (e as Error).message;
+  }
+  renderJobs();
+  void runQueue();
+}
+
+/** 여러 장의 사진 → 악보 하나 (넣은 순서대로 쪽) */
+async function enqueuePhotos(files: File[]): Promise<void> {
+  const job = newJob(files[0].name.replace(/\.[^.]+$/, ''), false);
+  try {
+    for (const f of files) job.pages.push({ ...(await imageToPage(f)), include: true, pageNo: job.pages.length + 1 });
+    job.status = 'queued';
+    job.message = `대기 중 · ${job.pages.length}쪽`;
+  } catch (e) {
+    job.status = 'failed';
+    job.message = (e as Error).message;
+  }
+  renderJobs();
+  void runQueue();
+}
+
+/** 대기 중인 작업을 하나씩 (인식 엔진은 한 번에 한 쪽만 처리한다) */
+async function runQueue(): Promise<void> {
+  if (queueBusy) return;
+  queueBusy = true;
+  try {
+    for (;;) {
+      const job = jobs.find((j) => j.status === 'queued');
+      if (!job) break;
+      await processJob(job);
+    }
+  } finally {
+    queueBusy = false;
+    renderJobs();
+  }
+}
+
+async function processJob(job: ImportJob): Promise<void> {
+  job.status = 'running';
+  job.started = performance.now();
+  const total = job.pages.length;
+  const results: OmrPage[] = [];
+  try {
+    const server = await checkServer(prefs.omrServer);
+    if (!server.ok) throw new Error(server.message);
     for (let i = 0; i < total; i++) {
-      const page = pages[i];
-      showImportProgress(`${i + 1}/${total}쪽 인식 중 (${importList.indexOf(page) + 1}쪽)… ${importEta(started, i, total)}`);
+      const page = job.pages[i];
+      job.done = i;
+      job.message = `${i + 1}/${total}쪽 인식 중 ${importEta(job.started, i, total)}`;
+      renderJobs();
       try {
-        const r = await recognizePage(prefs.omrServer, page, importAbort.signal);
+        const r = await recognizePage(prefs.omrServer, page, job.abort.signal);
         results.push(r);
         judgePage(page, r);
       } catch (e) {
@@ -518,32 +630,117 @@ async function startImport(): Promise<void> {
         page.note = err.message;
         results.push({ musicxml: '', staffs: [] });
       }
-      renderThumbs();
     }
+    job.done = total;
     const notes = results.reduce((a, r) => a + (r.musicxml.match(/<pitch>/g)?.length ?? 0), 0);
-    const failed = pages.filter((p) => p.status === 'failed');
+    const failed = job.pages.filter((p) => p.status === 'failed');
     if (notes === 0) {
       throw new Error(failed.length ? (failed[0].note ?? '') : '음표를 하나도 찾지 못했어요. 더 밝고 반듯하게 찍어 보세요.');
     }
-    // 쪽 번호는 창을 닫기 전에 (닫으면 목록이 비워진다)
-    const no = (list: ImportItem[]) => list.map((p) => importList.indexOf(p) + 1).join(', ');
-    const partial = pages.filter((p) => p.status === 'partial');
-    let msg = `'${title}' 악보를 저장했어요 (${total}쪽, 음표 ${notes}개).`;
+    const no = (list: ImportItem[]) => list.map((p) => p.pageNo).join(', ');
+    const partial = job.pages.filter((p) => p.status === 'partial');
+    let msg = `'${job.title}' 악보를 저장했어요 (${total}쪽, 음표 ${notes}개).`;
     if (failed.length) msg += ` ${no(failed)}쪽은 읽지 못했어요.`;
     if (partial.length) msg += ` ${no(partial)}쪽은 일부 줄만 읽었어요.`;
     if (failed.length || partial.length) msg += ' 그 부분은 흐른 시간으로 위치를 어림해요.';
-    const stored = await lib.addImageScore(title, pages, results);
-    el.importDialog.close();
+    const stored = await lib.addImageScore(job.title, job.pages, results);
+    job.scoreId = stored.id;
+    job.status = 'done';
+    job.message = `완료 · 음표 ${notes}개${failed.length ? ` · ${failed.length}쪽 못 읽음` : ''}`;
     await renderLibrary();
-    await openScore(stored.id);
+    // 창에서 시작한 하나짜리는 끝나면 바로 연다 (연주를 듣는 중이면 방해하지 않는다)
+    if (job.openWhenDone && !mic) await openScore(stored.id);
     toast(msg);
   } catch (e) {
-    if ((e as Error).name !== 'AbortError') showImportProgress(`인식하지 못했어요: ${(e as Error).message}`);
-  } finally {
-    el.importStart.disabled = false;
-    importAbort = null;
+    if ((e as Error).name === 'AbortError') {
+      job.status = 'canceled';
+      job.message = '취소했어요';
+    } else {
+      job.status = 'failed';
+      job.message = `인식하지 못했어요: ${(e as Error).message}`;
+      toast(`'${job.title}' ${job.message}`);
+    }
   }
+  renderJobs();
 }
+
+function cancelJob(job: ImportJob): void {
+  if (job.status === 'running') job.abort.abort();
+  else if (job.status === 'queued' || job.status === 'preparing') {
+    job.status = 'canceled';
+    job.message = '취소했어요';
+  }
+  renderJobs();
+}
+
+/** 목록 위 "인식 중" 칸, 좁은 화면의 목록 버튼 표시, 창 제목 */
+function renderJobs(): void {
+  const active = jobs.filter((j) => j.status === 'preparing' || j.status === 'queued' || j.status === 'running');
+  el.jobs.hidden = jobs.length === 0;
+  el.jobsBadge.hidden = active.length === 0;
+  el.jobsBadge.textContent = String(active.length);
+  const running = jobs.find((j) => j.status === 'running');
+  document.title = running ? `(${running.done}/${running.pages.length}) Read Classic` : 'Read Classic · 악보 따라가기';
+  el.jobList.replaceChildren(
+    ...jobs.map((job) => {
+      const li = document.createElement('li');
+      li.className = `job ${job.status}`;
+      const head = document.createElement('div');
+      head.className = 'job-head';
+      const t = document.createElement('span');
+      t.className = 'job-title';
+      t.textContent = job.title;
+      head.append(t);
+      const btn = (text: string, label: string, fn: () => void) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'job-btn';
+        b.textContent = text;
+        b.setAttribute('aria-label', `${job.title} ${label}`);
+        b.title = label;
+        b.addEventListener('click', fn);
+        return b;
+      };
+      if (job.status === 'done' && job.scoreId) {
+        head.append(
+          btn('열기', '열기', () => {
+            closeLibrary();
+            void openScore(job.scoreId!);
+          }),
+        );
+      }
+      if (job.status === 'preparing' || job.status === 'queued' || job.status === 'running') {
+        head.append(btn('취소', '인식 취소', () => cancelJob(job)));
+      } else {
+        head.append(
+          btn('×', '목록에서 지우기', () => {
+            jobs = jobs.filter((j) => j !== job);
+            renderJobs();
+          }),
+        );
+      }
+      const msg = document.createElement('span');
+      msg.className = 'job-msg';
+      msg.textContent = job.message;
+      const bar = document.createElement('div');
+      bar.className = 'job-bar';
+      const fill = document.createElement('i');
+      const frac = job.status === 'done' ? 1 : job.pages.length ? job.done / job.pages.length : 0;
+      fill.style.width = `${Math.round(frac * 100)}%`;
+      bar.append(fill);
+      li.append(head, msg, bar);
+      return li;
+    }),
+  );
+}
+
+// 인식 중에 창을 닫으면 멈춘다: 닫기 전에 한 번 묻는다
+window.addEventListener('beforeunload', (e) => {
+  if (jobs.some((j) => j.status === 'preparing' || j.status === 'queued' || j.status === 'running')) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+});
 
 /** 찾아 둔 오선과 인식된 줄을 견줘서 쪽마다 결과를 매긴다. */
 function judgePage(page: ImportItem, r: OmrPage): void {
@@ -1082,11 +1279,9 @@ el.importDialog.addEventListener('drop', (e) => {
 el.importStart.addEventListener('click', () => void startImport());
 el.importRange.addEventListener('change', applyRange);
 el.importCancel.addEventListener('click', () => {
-  importAbort?.abort();
   el.importDialog.close();
 });
 el.importDialog.addEventListener('close', () => {
-  importAbort?.abort();
   importList = [];
   renderThumbs();
 });
@@ -1456,5 +1651,11 @@ void init();
   },
   get progress() {
     return snap;
+  },
+  /** AI 음 인식: 모델 한 번 계산 시간(ms), 처리 대기 중인 소리 길이(초), AI 를 붙인/못 붙인 프레임 수 */
+  get ai() {
+    if (!keyStream) return null;
+    const latest = aiPending.length ? aiPending[aiPending.length - 1].time - aiPending[0].time : 0;
+    return { runMs: Math.round(keyStream.lastRunSec * 1000), pendingSec: +latest.toFixed(2), used: aiUsed, skipped: aiSkipped };
   },
 };

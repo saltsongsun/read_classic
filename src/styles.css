@@ -323,6 +323,113 @@ textarea {
 .cam-btn svg {
   stroke: var(--gold-bright);
 }
+/* 뒤에서 인식 중인 악보 */
+.jobs {
+  margin: 0 0 18px;
+}
+.jobs .lib-heading {
+  margin-top: 4px;
+}
+.job-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.job {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: grid;
+  gap: 6px;
+}
+.job-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.job-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: var(--fw-semibold);
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.job-btn {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-2);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: var(--fw-medium);
+  cursor: pointer;
+}
+.job-btn:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+}
+.job.done .job-btn:first-of-type {
+  background: var(--gold);
+  border-color: var(--gold);
+  color: #fff;
+}
+.job-msg {
+  font-size: 12px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.job.failed .job-msg {
+  color: var(--wine);
+}
+.job-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  overflow: hidden;
+}
+.job-bar i {
+  display: block;
+  height: 100%;
+  background: var(--gold);
+  transition: width 0.4s var(--ease);
+}
+.job.running .job-bar i {
+  background: linear-gradient(90deg, var(--gold), var(--gold-bright));
+}
+.job.failed .job-bar,
+.job.canceled .job-bar {
+  display: none;
+}
+.job-note {
+  margin: 8px 4px 0;
+  font-size: 11.5px;
+  color: var(--ink-3);
+}
+.jobs-badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--gold-bright);
+  color: #1b1916;
+  font-size: 10px;
+  font-weight: var(--fw-bold);
+  line-height: 16px;
+  text-align: center;
+}
+#libraryToggle {
+  position: relative;
+}
+
 .lib-heading {
   margin: 28px 4px 8px;
   font-size: 11.5px;

@@ -13,6 +13,7 @@
       <header class="topbar">
         <button class="icon-btn only-narrow" id="libraryToggle" aria-label="악보 목록 열기" aria-controls="library" aria-expanded="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" /></svg>
+          <span class="jobs-badge" id="jobsBadge" hidden></span>
         </button>
         <div class="brand">
           <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M40 12v28.5a8 8 0 1 1-4-6.9V20l-14 4v20.5a8 8 0 1 1-4-6.9V18z" /></svg></span>
@@ -43,10 +44,15 @@
             </div>
             <a class="get-app-more" id="updatePage" href="#" target="_blank" rel="noopener">바뀐 점 보기</a>
           </div>
+          <section class="jobs" id="jobs" hidden aria-label="인식 중인 악보">
+            <h2 class="lib-heading">인식 중</h2>
+            <ul class="job-list" id="jobList"></ul>
+            <p class="job-note">이 창을 닫으면 인식이 멈춰요. 그동안 다른 악보를 써도 돼요.</p>
+          </section>
           <label class="drop" id="drop">
             <input type="file" id="fileInput" accept=".musicxml,.xml,.mxl,application/vnd.recordare.musicxml+xml,application/vnd.recordare.musicxml,image/*,.pdf,application/pdf" multiple />
             <span class="drop-title">악보 파일 추가</span>
-            <span class="drop-hint">PDF · 사진/이미지 · MusicXML 을 끌어다 놓거나 눌러서 선택</span>
+            <span class="drop-hint">PDF · 사진/이미지 · MusicXML 을 끌어다 놓거나 눌러서 선택 (여러 PDF 를 한꺼번에 넣으면 각각 악보로 뒤에서 인식)</span>
           </label>
           <label class="cam-btn">
             <input type="file" id="cameraInput" accept="image/*" capture="environment" />

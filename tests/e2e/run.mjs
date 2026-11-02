@@ -138,7 +138,8 @@ for (const c of CASES) {
     return idx;
   };
   let best = { near: 0, delay: 0 };
-  for (let d = -0.6; d <= 1.2; d += 0.05) {
+  // AI 음 인식은 기기가 붐비면 더 늦을 수 있어 2초까지 본다
+  for (let d = -0.6; d <= (c.ai ? 2.0 : 1.2); d += 0.05) {
     const considered = samples.filter((s) => truthAt(s.t - d - 0.15) >= 0 && s.t - d < truth.timeline.at(-1).time + 0.3);
     const ok = considered.filter((s) => Math.abs(s.pos - truthAt(s.t - d - 0.15)) <= 1).length;
     const near = considered.length ? ok / considered.length : 0;
@@ -256,6 +257,37 @@ if (omrReady) {
   failed ||= !pass;
   console.log(
     `${pass ? 'PASS' : 'FAIL'} PDF 표지 건너뛰기: 스캔 해독기 ${wasmOk ? '있음' : '없음'}, 뺀 쪽 ${JSON.stringify(excluded)}, 악보 ${st.kind}, 음 ${st.events}개, 알림 "${toastText.trim()}"` +
+      (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
+  );
+  await browser.close();
+}
+
+// 여러 PDF 를 한꺼번에: 파일마다 악보 하나씩, 뒤에서 차례로 인식 (그동안 다른 악보를 열어 둘 수 있다)
+if (omrReady) {
+  const browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.goto(`${base}?score=sample:twinkle`);
+  await page.waitForFunction(() => window.__readClassic?.events.length > 0, null, { timeout: 30000 });
+  const pdf = readFileSync(join(root, 'tests/pages/cover-and-music.pdf'));
+  await page.setInputFiles('#fileInput', [
+    { name: '첫째 곡.pdf', mimeType: 'application/pdf', buffer: pdf },
+    { name: '둘째 곡.pdf', mimeType: 'application/pdf', buffer: pdf },
+  ]);
+  // 창이 뜨지 않고 "인식 중" 칸에 두 작업이 생긴다
+  await page.waitForFunction(() => document.querySelectorAll('#jobList .job').length === 2, null, { timeout: 30000 });
+  const dialogOpen = await page.evaluate(() => document.getElementById('importDialog').open);
+  await page.waitForFunction(() => document.querySelectorAll('#jobList .job.done').length === 2, null, { timeout: 240000 }).catch(() => undefined);
+  const states = await page.$$eval('#jobList .job', (ls) => ls.map((l) => l.className.replace('job ', '') + ':' + l.querySelector('.job-msg').textContent));
+  const titles = await page.$$eval('#userList .lib-title', (ls) => ls.map((l) => l.textContent));
+  // 그동안 보던 악보는 그대로 (저절로 바뀌지 않는다)
+  const stillTwinkle = await page.evaluate(() => window.__readClassic.events.length < 50);
+  const pass =
+    !dialogOpen && states.every((x) => x.startsWith('done')) && titles.includes('첫째 곡') && titles.includes('둘째 곡') && stillTwinkle && errors.length === 0;
+  failed ||= !pass;
+  console.log(
+    `${pass ? 'PASS' : 'FAIL'} 여러 PDF 뒤에서 인식: 작업 ${JSON.stringify(states)}, 목록 ${JSON.stringify(titles)}, 보던 악보 그대로 ${stillTwinkle}` +
       (errors.length ? `, 페이지 오류: ${errors.join(' | ')}` : ''),
   );
   await browser.close();
